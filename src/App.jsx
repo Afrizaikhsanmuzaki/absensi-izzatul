@@ -24,8 +24,8 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseAdminKey, {
 
 // --- KONFIGURASI LOKASI SEKOLAH (Geofencing) ---
 const SCHOOL_LOCATION = {
-  latitude: -6.336411,
-  longitude: 107.3381365,
+  latitude: -6.3403,
+  longitude: 107.3551,
   radiusAllowedMeters: 200,
 };
 

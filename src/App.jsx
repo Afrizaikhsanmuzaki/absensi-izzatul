@@ -24,9 +24,16 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseAdminKey, {
 
 // --- KONFIGURASI LOKASI SEKOLAH (Geofencing) ---
 const SCHOOL_LOCATION = {
-  latitude: -6.3325385,
-  longitude: 107.3494046,
+  latitude: -6.336411,
+  longitude: 107.3381365,
   radiusAllowedMeters: 200,
+};
+
+// --- KONFIGURASI AKURASI GPS ---
+const gpsOptions = {
+  enableHighAccuracy: true,
+  timeout: 10000,
+  maximumAge: 0
 };
 
 function calculateDistance(lat1, lon1, lat2, lon2) {

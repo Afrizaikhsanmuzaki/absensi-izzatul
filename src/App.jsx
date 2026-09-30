@@ -28,7 +28,7 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseAdminKey, {
 const SCHOOL_LOCATION = {
   latitude: -6.3403,
   longitude: 107.3551,
-  radiusAllowedMeters: 200,
+  radiusAllowedMeters: 35,
 };
 
 // --- KONFIGURASI AKURASI GPS ---
@@ -362,7 +362,7 @@ const LoginScreen = ({ onLoginSuccess }) => {
               />
             </div>
             
-            <h1 className="text-3xl font-bold text-white mb-2 font-serif">SDIT Izzatul Islam</h1>
+            <h1 className="text-3xl font-bold text-white mb-2 font-serif">SDIT Izzatul Islam </h1>
             <p className="text-amber-200/80 text-xs font-bold uppercase tracking-[0.25em]">Portal Presensi</p>
             
             <LoginLiveClock />
@@ -438,7 +438,7 @@ const Sidebar = ({ user, activeMenu, setActiveMenu, onLogout, isMobileOpen, setI
           </div>
           
           <div>
-            <h2 className="font-serif font-bold text-white text-lg leading-tight">Izzatul Islam</h2>
+            <h2 className="font-serif font-bold text-white text-lg leading-tight">Absensi SDIT Izzatul Islam</h2>
             <p className="text-[9px] text-emerald-400 font-bold uppercase tracking-widest">Portal Presensi</p>
           </div>
           <button className="ml-auto lg:hidden text-slate-400" onClick={() => setIsMobileOpen(false)}><X className="h-5 w-5" /></button>
@@ -2633,7 +2633,7 @@ const RekapAbsensi = () => {
 };
 
 const PengaturanSistem = () => {
-  const [batasWaktu, setBatasWaktu] = useState("07:00"); 
+  const [batasWaktu, setBatasWaktu] = useState("06:50"); 
   const [isSaving, setIsSaving] = useState(false);
   
   useEffect(() => { 

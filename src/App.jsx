@@ -2733,7 +2733,7 @@ const App = () => {
                 e.target.style.display = 'none';
               }} 
             />
-            Izzatul Islam
+            Absensi SDIT Izzatul Islam
           </div>
           <button onClick={() => setIsMobileSidebarOpen(true)} className="p-2">
             <Menu className="h-6 w-6" />

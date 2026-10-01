@@ -560,7 +560,7 @@ const AbsenScreen = ({ user }) => {
                 return;
               }
 
-              let batasJam = 7, batasMenit = 0;
+              let batasJam = 6, batasMenit = 50;
               try {
                 const { data: config } = await supabase
                   .from("pengaturan")

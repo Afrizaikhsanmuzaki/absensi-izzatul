@@ -28,7 +28,7 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseAdminKey, {
 const SCHOOL_LOCATION = {
   latitude: -6.3403,
   longitude: 107.3551,
-  radiusAllowedMeters: 35,
+  radiusAllowedMeters: 25,
 };
 
 // --- KONFIGURASI AKURASI GPS ---
@@ -352,7 +352,7 @@ const LoginScreen = ({ onLoginSuccess }) => {
             {/* LOGO SEKOLAH UNTUK HALAMAN LOGIN */}
             <div className="inline-flex items-center justify-center w-28 h-28 bg-white/10 backdrop-blur-sm rounded-3xl mb-6 shadow-inner border border-white/10 p-3">
               <img 
-                src="/logo.png" 
+                src="/Logo fix.png" 
                 alt="Logo SDIT Izzatul Islam" 
                 className="w-full h-full object-contain drop-shadow-lg"
                 onError={(e) => {
@@ -427,7 +427,7 @@ const Sidebar = ({ user, activeMenu, setActiveMenu, onLogout, isMobileOpen, setI
           {/* LOGO SEKOLAH UNTUK SIDEBAR ADMIN/GURU */}
           <div className="bg-white p-1 rounded-xl mr-3 h-10 w-10 flex items-center justify-center overflow-hidden shadow-sm">
             <img 
-              src="/logo.png" 
+              src="/Logo fix.png" 
               alt="Logo" 
               className="w-full h-full object-contain"
               onError={(e) => {
@@ -592,7 +592,7 @@ const AbsenScreen = ({ user }) => {
 
               if (error) throw error;
               setSuccessMsg(
-                `BERHASIL: Tercatat pukul ${waktuStr} WIB. Jarak Anda: ${jarakMeter}m.`
+                `BERHASIL: Tercatat pukul ${waktuStr} WIB. Jarak Anda Dari Sekolah: ${jarakMeter}m.`
               );
               fetchTodayRecord();
             } else if (mode === "pulang") {
@@ -624,14 +624,14 @@ const AbsenScreen = ({ user }) => {
           }
         } else {
           setErrorMsg(
-            `AKSES DITOLAK: Anda berada di luar radius sekolah. Jarak: ${jarakMeter} meter.`
+            `AKSES DITOLAK: Anda berada di luar radius sekolah. Jarak Anda: ${jarakMeter} meter.`
           );
         }
         setIsLocating(false);
       },
       (error) => {
         setErrorMsg(
-          "Gagal memindai satelit GPS. Pastikan Izin Lokasi menyala."
+          "Gagal Memindai Satelit GPS. Pastikan Izin Lokasi Anda Menyala."
         );
         setIsLocating(false);
       },
@@ -742,10 +742,10 @@ const AbsenScreen = ({ user }) => {
               <MapPin className="h-8 w-8 text-emerald-600" />
             </div>
             <h2 className="text-xl font-bold text-slate-800 mb-2 font-serif">
-              Pindai Lokasi Masuk
+              Pindai Lokasi Masuk Anda
             </h2>
             <p className="text-slate-500 mb-6 text-sm max-w-sm mx-auto">
-              Pastikan Anda berada di dalam area radius GPS sekolah.
+              Pastikan Anda berada di dalam area sekolah.
             </p>
             <button
               onClick={() => handleAbsenGPS("masuk")}
@@ -763,7 +763,7 @@ const AbsenScreen = ({ user }) => {
               <LogOutIcon className="h-8 w-8 text-indigo-600" />
             </div>
             <h2 className="text-xl font-bold text-slate-800 mb-2 font-serif">
-              Pindai Lokasi Pulang
+              Pindai Lokasi Pulang Anda
             </h2>
             <p className="text-slate-500 mb-6 text-sm max-w-sm mx-auto">
               Akhiri jam kerja Anda hari ini. Sistem akan memperbarui rekam
@@ -1040,14 +1040,14 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
                 Selamat Datang, {user?.name}
               </h1>
               <p className="text-emerald-100 text-sm max-w-xl leading-relaxed">
-                Semoga hari ini penuh berkah. Jangan lupa presensi kehadiran.
+                Semoga hari ini penuh berkah. Jangan lupa presensi kehadiran anda.
               </p>
             </div>
             <button
               onClick={() => setActiveMenu("absen")}
               className="relative z-10 whitespace-nowrap bg-white text-emerald-800 px-6 py-3.5 rounded-xl font-bold text-sm shadow-md hover:bg-emerald-50 transition-all flex items-center justify-center gap-2"
             >
-              <MapPin className="h-5 w-5" /> Buka Modul Presensi
+              <MapPin className="h-5 w-5" /> Buka Presensi Guru
             </button>
           </div>
 
@@ -2725,7 +2725,7 @@ const App = () => {
           <div className="font-bold text-lg flex items-center">
             {/* LOGO UNTUK HEADER HP (MOBILE) */}
             <img 
-              src="/logo.png" 
+              src="/Logo fix.png" 
               alt="Logo" 
               className="h-8 w-8 inline mr-2 object-contain"
               onError={(e) => {

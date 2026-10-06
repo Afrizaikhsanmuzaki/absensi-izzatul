@@ -376,12 +376,12 @@ const LoginScreen = ({ onLoginSuccess }) => {
           )}
           
           <form onSubmit={handleLogin} className="space-y-5">
-            <InputField icon={User} label="NIP / Username" type="text" placeholder="Masukkan NIP Anda" value={nip} onChange={(e) => setNip(e.target.value)} />
-            <InputField icon={Lock} label="Kata Sandi" type="password" placeholder="••••••••••••••" value={password} onChange={(e) => setPassword(e.target.value)} isPassword={true} showPassword={showPassword} togglePassword={() => setShowPassword(!showPassword)} />
+            <InputField icon={User} label="NIP / Username" type="text" placeholder="Masukkan Username Anda" value={nip} onChange={(e) => setNip(e.target.value)} />
+            <InputField icon={Lock} label="Kata Sandi" type="password" placeholder="Masukan Sandi Anda" value={password} onChange={(e) => setPassword(e.target.value)} isPassword={true} showPassword={showPassword} togglePassword={() => setShowPassword(!showPassword)} />
             <div>
               <label className="block text-[11px] font-bold text-emerald-200/70 mb-2 uppercase tracking-wider ml-1">Verifikasi Keamanan</label>
               <div className="flex gap-3">
-                <input type="text" value={captchaInput} onChange={(e) => setCaptchaInput(e.target.value)} className="w-full px-4 py-4 bg-slate-800/50 border border-slate-700/50 text-white rounded-2xl text-center tracking-widest text-lg font-bold" placeholder="----" maxLength="4" required />
+                <input type="text" value={captchaInput} onChange={(e) => setCaptchaInput(e.target.value)} className="w-full px-4 py-4 bg-slate-800/50 border border-slate-700/50 text-white rounded-2xl text-center tracking-widest text-lg font-bold" placeholder="Masukan Kode  ..." maxLength="4" required />
                 <div className="w-32 bg-slate-800 border border-slate-700/50 rounded-2xl flex items-center justify-center gap-2 cursor-pointer" onClick={generateCaptcha}>
                   <span className="font-mono text-xl font-bold text-amber-400">{captchaCode}</span>
                   <RefreshCw className="h-4 w-4 text-slate-500" />

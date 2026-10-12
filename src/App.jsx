@@ -604,7 +604,7 @@ const AbsenScreen = ({ user }) => {
                 return;
               }
               if (todayRecord.waktu_pulang) {
-                setSuccessMsg(`Anda sudah Absen Pulang hari ini pada ${todayRecord.waktu_pulang} WIB.`);
+                setSuccessMsg(`Terima kasih ya sudah absen sesuai ketentuan SOP! Selamat melanjutkan aktivitas kembali, semoga harimu menyenangkan dan berkah selalu, Anda sudah Absen Pulang hari ini pada ${todayRecord.waktu_pulang} WIB,  :).`);
                 setIsLocating(false);
                 return;
               }
@@ -616,7 +616,7 @@ const AbsenScreen = ({ user }) => {
               // getHours() mengembalikan format 24 jam (0-23). Jika kurang dari 16, tolak!
               if (currentHour < 16) {
                 setErrorMsg(
-                  "Mohon maaf, saat ini sistem belum dapat menerima absensi Anda. Sesuai SOP perusahaan, mohon lakukan absensi tepat pada pukul 16.00. Terima kasih atas kerja samanya."
+                  "Mohon maaf, saat ini sistem belum dapat menerima absensi Anda. Sesuai SOP Sekolah, mohon lakukan absensi tepat pada pukul 16.00. Terima kasih atas kerja samanya."
                 );
                 setIsLocating(false);
                 return; // Return menghentikan proses sehingga data tidak dikirim ke Supabase

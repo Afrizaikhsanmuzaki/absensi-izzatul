@@ -609,11 +609,26 @@ const AbsenScreen = ({ user }) => {
                 return;
               }
 
+              // ====================================================================
+              // --- LOGIKA BARU: VALIDASI SOP JAM PULANG (MINIMAL JAM 16:00) ---
+              // ====================================================================
+              const currentHour = new Date().getHours();
+              // getHours() mengembalikan format 24 jam (0-23). Jika kurang dari 16, tolak!
+              if (currentHour < 16) {
+                setErrorMsg(
+                  "Mohon maaf, saat ini sistem belum dapat menerima absensi Anda. Sesuai SOP perusahaan, mohon lakukan absensi tepat pada pukul 16.00. Terima kasih atas kerja samanya."
+                );
+                setIsLocating(false);
+                return; // Return menghentikan proses sehingga data tidak dikirim ke Supabase
+              }
+              // ====================================================================
+
               const { error } = await supabase
                 .from("absensi")
                 .update({ waktu_pulang: waktuStr })
                 .eq("id", todayRecord.id);
               if (error) throw error;
+              
               setSuccessMsg(
                 `ABSEN PULANG BERHASIL! Tercatat pada ${waktuStr} WIB.`
               );

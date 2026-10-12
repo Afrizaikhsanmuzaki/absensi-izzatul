@@ -604,7 +604,7 @@ const AbsenScreen = ({ user }) => {
                 return;
               }
               if (todayRecord.waktu_pulang) {
-                setSuccessMsg(`Terima kasih ya sudah absen sesuai ketentuan SOP! Selamat melanjutkan aktivitas kembali, semoga harimu menyenangkan dan berkah selalu, Anda sudah Absen Pulang hari ini pada ${todayRecord.waktu_pulang} WIB,  :).`);
+                setSuccessMsg(`Anda sudah Absen Pulang hari ini pada ${todayRecord.waktu_pulang} WIB,  :).`);
                 setIsLocating(false);
                 return;
               }
@@ -630,7 +630,7 @@ const AbsenScreen = ({ user }) => {
               if (error) throw error;
               
               setSuccessMsg(
-                `ABSEN PULANG BERHASIL! Tercatat pada ${waktuStr} WIB.`
+                `ABSEN PULANG BERHASIL! Tercatat pada ${waktuStr} WIB, Terima kasih ya sudah absen sesuai ketentuan SOP! Selamat melanjutkan aktivitas kembali, semoga harimu menyenangkan dan berkah selalu.`
               );
               fetchTodayRecord();
             }

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, memo } from "react";
+import { Turnstile } from '@marsidev/react-turnstile';
 import {
   Activity, RefreshCw, Calendar, Clock, User, Lock, ShieldCheck,
   MapPin, CheckCircle, AlertTriangle, LogOut, X, Menu, FileText,
@@ -10,6 +11,7 @@ import {
 
 import { createClient } from "@supabase/supabase-js";
 
+
 // ============================================================================
 // --- INTEGRASI SUPABASE (AMAN MENGGUNAKAN ENVIRONMENT VARIABLES) ---
 // ============================================================================
@@ -17,10 +19,7 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "https://ffbnxfsetlqftf
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_W0Zob25U9HJ7K-0eO1YtLA_EdJc1XoG";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const supabaseAdminKey = import.meta.env.VITE_SUPABASE_ADMIN_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZmYm54ZnNldGxxZnRmY3l2amZjIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NTc2NDM1OCwiZXhwIjoyMTAxMzQwMzU4fQ.hHlw_C0yXGdJMMYqxfEM-ZBDrFYr91dtBqNf3MdHro8";
-const supabaseAdmin = createClient(supabaseUrl, supabaseAdminKey, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
+
 
 // ============================================================================
 // --- KONFIGURASI LOKASI SEKOLAH (Geofencing) ---
@@ -264,28 +263,21 @@ const LoginScreen = ({ onLoginSuccess }) => {
   const [nip, setNip] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [captchaInput, setCaptchaInput] = useState("");
-  const [captchaCode, setCaptchaCode] = useState("");
+ // State baru untuk menyimpan token validasi dari Cloudflare
+ const [turnstileToken, setTurnstileToken] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => { 
-    generateCaptcha(); 
-  }, []);
-
-  const generateCaptcha = () => {
-    setCaptchaCode(Math.floor(1000 + Math.random() * 9000).toString());
-    setCaptchaInput("");
-  };
+  
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setErrorMsg("");
     setIsLoading(true);
 
-    if (captchaInput !== captchaCode) {
-      setErrorMsg("Kode verifikasi tidak cocok.");
-      generateCaptcha();
+    // Validasi Keamanan Modern (Turnstile)
+    if (!turnstileToken) {
+      setErrorMsg("Sistem mendeteksi anomali. Harap tunggu verifikasi keamanan selesai.");
       setIsLoading(false);
       return;
     }
@@ -309,7 +301,7 @@ const LoginScreen = ({ onLoginSuccess }) => {
       onLoginSuccess(pegawai);
     } catch (error) {
       setErrorMsg(`Login Gagal! ${error.message}`);
-      generateCaptcha();
+      // generateCaptcha() dihapus dari sini
     } finally {
       setIsLoading(false);
     }
@@ -325,16 +317,20 @@ const LoginScreen = ({ onLoginSuccess }) => {
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-400 via-amber-300 to-emerald-400 opacity-80"></div>
           
           <div className="text-center mb-8">
-            <style>
+          <style>
               {`
                 @keyframes marquee {
-                  0% { transform: translateX(100%); }
-                  100% { transform: translateX(-150%); }
+                  /* Mulai dari posisi diam (karena teks sudah didorong oleh padding) */
+                  0% { transform: translateX(0); }
+                  /* Bergerak ke kiri sampai seluruh teks dan padding habis */
+                  100% { transform: translateX(-100%); }
                 }
                 .animate-marquee {
                   display: inline-block;
                   white-space: nowrap;
-                  animation: marquee 20s linear infinite;
+                  /* INI KUNCINYA: Mendorong teks tepat ke luar batas kanan wadah/layar */
+                  padding-left: 100%; 
+                  animation: marquee 15s linear infinite;
                 }
                 .animate-marquee:hover {
                   animation-play-state: paused;
@@ -376,20 +372,18 @@ const LoginScreen = ({ onLoginSuccess }) => {
           )}
           
           <form onSubmit={handleLogin} className="space-y-5">
-            <InputField icon={User} label="NIP / Username" type="text" placeholder="Masukan Username Anda" value={nip} onChange={(e) => setNip(e.target.value)} />
+            <InputField icon={User} label="NIP " type="text" placeholder="Masukan NIP Anda" value={nip} onChange={(e) => setNip(e.target.value)} />
             <InputField icon={Lock} label="Kata Sandi" type="password" placeholder="Masukan Sandi Anda" value={password} onChange={(e) => setPassword(e.target.value)} isPassword={true} showPassword={showPassword} togglePassword={() => setShowPassword(!showPassword)} />
-            <div>
-              <label className="block text-[11px] font-bold text-emerald-200/70 mb-2 uppercase tracking-wider ml-1">Verifikasi Keamanan</label>
-              <div className="flex gap-3">
-                <input type="text" value={captchaInput} onChange={(e) => setCaptchaInput(e.target.value)} className="w-full px-4 py-4 bg-slate-800/50 border border-slate-700/50 text-white rounded-2xl text-center tracking-widest text-lg font-bold" placeholder="Masukan Kode" maxLength="4" required />
-                <div className="w-32 bg-slate-800 border border-slate-700/50 rounded-2xl flex items-center justify-center gap-2 cursor-pointer" onClick={generateCaptcha}>
-                  <span className="font-mono text-xl font-bold text-amber-400">{captchaCode}</span>
-                  <RefreshCw className="h-4 w-4 text-slate-500" />
-                </div>
-              </div>
+            <div className="flex justify-center my-4">
+              <Turnstile 
+                siteKey="0x4AAAAAAFfg_zNgnPTzAL59" 
+                onSuccess={(token) => setTurnstileToken(token)}
+                onError={() => setErrorMsg("Verifikasi keamanan gagal dimuat. Cek koneksi internet Anda.")}
+                options={{ theme: 'dark' }} 
+              />
             </div>
             <button type="submit" disabled={isLoading} className="w-full py-4 mt-6 bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-bold rounded-2xl flex items-center justify-center gap-2 transition-all hover:scale-[1.02] active:scale-95">
-              {isLoading ? <RefreshCw className="h-5 w-5 animate-spin" /> : <>Otentikasi Masuk <ArrowRight className="h-5 w-5" /></>}
+              {isLoading ? <RefreshCw className="h-5 w-5 animate-spin" /> : <>Masuk <ArrowRight className="h-5 w-5" /></>}
             </button>
           </form>
         </div>
@@ -604,18 +598,33 @@ const AbsenScreen = ({ user }) => {
                 return;
               }
               if (todayRecord.waktu_pulang) {
-                setSuccessMsg(`Anda sudah Absen Pulang hari ini pada ${todayRecord.waktu_pulang} WIB.`);
+                setSuccessMsg(`Anda sudah Absen Pulang hari ini pada ${todayRecord.waktu_pulang} WIB,  :).`);
                 setIsLocating(false);
                 return;
               }
+
+              // ====================================================================
+              // --- LOGIKA BARU: VALIDASI SOP JAM PULANG (MINIMAL JAM 16:00) ---
+              // ====================================================================
+              const currentHour = new Date().getHours();
+              // getHours() mengembalikan format 24 jam (0-23). Jika kurang dari 16, tolak!
+              if (currentHour < 16) {
+                setErrorMsg(
+                  "Mohon maaf, saat ini sistem belum dapat menerima absensi Anda. Sesuai SOP Sekolah, mohon lakukan absensi tepat pada pukul 16.00. Terima kasih atas kerja samanya."
+                );
+                setIsLocating(false);
+                return; // Return menghentikan proses sehingga data tidak dikirim ke Supabase
+              }
+              // ====================================================================
 
               const { error } = await supabase
                 .from("absensi")
                 .update({ waktu_pulang: waktuStr })
                 .eq("id", todayRecord.id);
               if (error) throw error;
+              
               setSuccessMsg(
-                `ABSEN PULANG BERHASIL! Tercatat pada ${waktuStr} WIB.`
+                `ABSEN PULANG BERHASIL! Tercatat pada ${waktuStr} WIB, Terima kasih ya sudah absen sesuai ketentuan SOP! Selamat melanjutkan aktivitas kembali, semoga harimu menyenangkan dan berkah selalu.`
               );
               fetchTodayRecord();
             }
@@ -1949,14 +1958,23 @@ const KelolaPegawai = () => {
     }; 
     try { 
       if (modalMode === "add") { 
-        await supabaseAdmin.auth.admin.createUser({ 
-          email: `${formData.username}@izzatulislam.com`, 
-          password: formData.password, 
-          email_confirm: true, 
-        }); 
-        await supabase.from("pegawai").insert([payload]); 
+        payload.password = formData.password; 
+        
+        // 1. Ambil token sesi yang sedang aktif secara paksa
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        // 2. Sisipkan token tersebut ke dalam Headers Edge Function
+        const { data, error } = await supabase.functions.invoke('create-user', {
+          body: payload,
+          headers: {
+            Authorization: `Bearer ${session?.access_token}`
+          }
+        });
+        
+        if (error) throw new Error("Gagal membuat user di server. " + error.message); 
       } else { 
-        await supabase.from("pegawai").update(payload).eq("username", formData.username); 
+        const { error } = await supabase.from("pegawai").update(payload).eq("username", formData.username); 
+        if (error) throw error;
       } 
       setIsModalOpen(false); 
       fetchPegawai(); 

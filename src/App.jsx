@@ -6,7 +6,7 @@ import {
   Users, UserCheck, Eye, EyeOff, LayoutDashboard, BookOpen,
   ClipboardCheck, Clock4, ChevronRight, ChevronLeft, GraduationCap, ArrowRight,
   Plus, Search, Edit2, Trash2, Save, Download, Settings, LogIn,
-  LogOut as LogOutIcon, Info, Filter, MoreHorizontal, CheckSquare, XCircle, Check, Printer, BarChart3,
+  LogOut as LogOutIcon, Info, Filter, MoreHorizontal, CheckSquare, XCircle, Check, Printer, BarChart3, Ticket,
 } from "lucide-react";
 
 import { supabase } from './lib/supabase.js';
@@ -331,18 +331,21 @@ const LoginScreen = ({ onLoginSuccess }) => {
 // --- SIDEBAR NAVIGASI ---
 // ============================================================================
 const Sidebar = ({ user, activeMenu, setActiveMenu, onLogout, isMobileOpen, setIsMobileOpen }) => {
-  const menus = user?.is_admin
-    ? [
-        { id: "dashboard", label: "Command Center", icon: LayoutDashboard },
-        { id: "pegawai", label: "Kelola Pegawai", icon: Users },
-        { id: "jadwaladmin", label: "Kelola Jadwal", icon: Calendar },
-        { id: "perizinan", label: "Kelola Perizinan", icon: CheckSquare },
-        { id: "rekap", label: "Rekap Absensi", icon: ClipboardCheck },
-        { id: "pengaturan", label: "Pengaturan Sistem", icon: Settings },
-      ]
-    : [
+  // CARI BLOK INI LALU UBAH MENJADI:
+const menus = user?.is_admin
+? [
+    { id: "dashboard", label: "Command Center", icon: LayoutDashboard },
+    { id: "pegawai", label: "Kelola Pegawai", icon: Users },
+    { id: "acara", label: "Agenda Acara", icon: MapPin }, // <--- TAMBAHKAN BARIS INI
+    { id: "jadwaladmin", label: "Kelola Jadwal", icon: Calendar },
+    { id: "perizinan", label: "Kelola Perizinan", icon: CheckSquare },
+    { id: "rekap", label: "Rekap Absensi", icon: ClipboardCheck },
+    { id: "pengaturan", label: "Pengaturan Sistem", icon: Settings },
+  ]
+: [
         { id: "dashboard", label: "Dashboard Guru", icon: LayoutDashboard },
         { id: "absen", label: "Modul Presensi", icon: MapPin },
+        { id: "acara_guru", label: "Presensi Acara", icon: Ticket },
         { id: "jadwal", label: "Jadwal Mengajar", icon: BookOpen },
         { id: "riwayat", label: "Riwayat Kehadiran", icon: FileText },
       ];
@@ -414,6 +417,317 @@ const Sidebar = ({ user, activeMenu, setActiveMenu, onLogout, isMobileOpen, setI
 };
 
 // ============================================================================
+// --- KOMPONEN GURU: PRESENSI ACARA KHUSUS (MASUK & PULANG) ---
+// ============================================================================
+const PresensiAcara = ({ user }) => {
+  const [acaraList, setAcaraList] = useState([]);
+  const [riwayatAbsen, setRiwayatAbsen] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [selectedAcara, setSelectedAcara] = useState(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [pesan, setPesan] = useState({ error: "", success: "" });
+
+  const today = new Date();
+  const currentMonthValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  const [filterBulan, setFilterBulan] = useState(currentMonthValue);
+
+  const fetchData = async () => {
+    setLoading(true);
+    const { data: events } = await supabase.from("agenda_acara").select("*").order("tanggal", { ascending: true });
+    
+    // PERBAIKAN: Ambil juga 'id' dan 'waktu_pulang' untuk eksekusi update nantinya
+    const { data: attendances } = await supabase
+      .from("absensi")
+      .select("id, tanggal, jenis_absen, waktu_absen, waktu_pulang")
+      .eq("nip_guru", user.username)
+      .ilike("jenis_absen", "%Acara%");
+
+    setAcaraList(events || []);
+    setRiwayatAbsen(attendances || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchData(); }, []);
+
+  const filteredEvents = acaraList.filter((item) => {
+    if (!filterBulan) return true;
+    const parts = item.tanggal ? item.tanggal.split("/") : [];
+    if (parts.length === 3) return `${parts[2]}-${parts[1]}` === filterBulan;
+    return false;
+  });
+
+  const cekDataAbsen = (acara) => {
+    return riwayatAbsen.find(a => a.tanggal === acara.tanggal && a.jenis_absen.includes(acara.nama_acara));
+  };
+
+  const hariIniStr = getTodayDateString();
+
+  const openModal = (acara) => {
+    setSelectedAcara(acara);
+    setPesan({ error: "", success: "" });
+  };
+
+  const closeModal = () => {
+    if (!isLocating) {
+      setSelectedAcara(null);
+      setPesan({ error: "", success: "" });
+    }
+  };
+
+  // LOGIKA BARU: Mode "masuk" (Insert) & Mode "pulang" (Update)
+  const eksekusiAbsenAcara = async (jarakMeter = 0, isBypass = false, mode = "masuk") => {
+    const waktuStr = getCurrentTimeString();
+    const tglStr = getTodayDateString();
+    const dataAbsenSaatIni = cekDataAbsen(selectedAcara);
+    
+    if (mode === "masuk") {
+      // PROSES ABSEN MASUK
+      const { data: insertedData, error } = await supabase.from("absensi").insert([{
+        nip_guru: user.username,
+        nama_guru: user.name,
+        tanggal: tglStr,
+        waktu_absen: waktuStr,
+        status: "Tepat Waktu",
+        jarak: isBypass ? "Bebas Lokasi" : `${jarakMeter} Meter`,
+        jenis_absen: `Hadir Acara - ${selectedAcara.nama_acara}`
+      }]).select().single(); // Pakai .select().single() agar ID yang baru dibuat langsung ditarik
+
+      if (error) {
+        setPesan({ error: error.message, success: "" });
+      } else {
+        setPesan({ error: "", success: `Kehadiran Acara tercatat pukul ${waktuStr} WIB.` });
+        setRiwayatAbsen([...riwayatAbsen, insertedData]); // Update state instan
+      }
+
+    } else if (mode === "pulang") {
+      // PROSES ABSEN PULANG
+      const { error } = await supabase.from("absensi").update({ waktu_pulang: waktuStr }).eq("id", dataAbsenSaatIni.id);
+
+      if (error) {
+        setPesan({ error: error.message, success: "" });
+      } else {
+        setPesan({ error: "", success: `Waktu Pulang Acara berhasil tercatat pukul ${waktuStr} WIB.` });
+        // Update state lokal secara instan
+        const updatedRiwayat = riwayatAbsen.map(a => a.id === dataAbsenSaatIni.id ? { ...a, waktu_pulang: waktuStr } : a);
+        setRiwayatAbsen(updatedRiwayat);
+      }
+    }
+    
+    setIsLocating(false);
+  };
+
+  const handleAbsenAcara = (mode) => {
+    if (selectedAcara.tanggal !== hariIniStr) {
+      setPesan({ error: "Akses Ditolak: Presensi hanya bisa dilakukan pada hari pelaksanaan acara.", success: "" });
+      return;
+    }
+
+    setIsLocating(true);
+    setPesan({ error: "", success: "" });
+
+    if (!selectedAcara.wajib_gps) {
+      eksekusiAbsenAcara(0, true, mode);
+    } else {
+      if (!navigator.geolocation) {
+        setPesan({ error: "Browser tidak mendukung GPS.", success: "" });
+        setIsLocating(false);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const jarak = Math.round(calculateDistance(pos.coords.latitude, pos.coords.longitude, selectedAcara.lat, selectedAcara.long));
+          if (jarak <= selectedAcara.radius) {
+            eksekusiAbsenAcara(jarak, false, mode);
+          } else {
+            setPesan({ error: `AKSES DITOLAK: Jarak Anda: ${jarak}m (Toleransi Maksimal: ${selectedAcara.radius}m).`, success: "" });
+            setIsLocating(false);
+          }
+        },
+        () => {
+          setPesan({ error: "Gagal memindai GPS. Pastikan izin lokasi aktif.", success: "" });
+          setIsLocating(false);
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-7xl mx-auto relative">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+        <div className="flex items-center gap-3">
+          <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-md"><Ticket className="h-6 w-6" /></div>
+          <div>
+            <h2 className="text-2xl font-bold font-serif text-slate-800">Agenda & Presensi Acara</h2>
+            <p className="text-sm text-slate-500 mt-1">Pantau jadwal kegiatan bulan ini dan catat kehadiran Anda.</p>
+          </div>
+        </div>
+        <div className="bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm flex items-center hover:border-indigo-300 w-full sm:w-auto transition-colors">
+          <div className="px-3 text-indigo-600"><Filter className="h-5 w-5" /></div>
+          <input
+            type="month"
+            value={filterBulan}
+            onChange={(e) => setFilterBulan(e.target.value)}
+            className="bg-transparent border-none text-sm font-bold text-slate-700 focus:ring-0 outline-none pr-3 w-full cursor-pointer"
+          />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="p-20 text-center bg-white rounded-3xl border border-slate-200 shadow-sm">
+          <RefreshCw className="h-10 w-10 animate-spin mx-auto text-indigo-500 mb-3" /> 
+          <p className="font-bold text-slate-500">Memuat Kalender Acara...</p>
+        </div>
+      ) : filteredEvents.length === 0 ? (
+        <div className="bg-white border border-slate-200 rounded-3xl p-16 text-center shadow-sm flex flex-col items-center">
+          <Calendar className="h-16 w-16 text-slate-200 mb-4" />
+          <h3 className="text-lg font-bold text-slate-700">Agenda Bulan Ini Kosong</h3>
+          <p className="text-slate-500 mt-2 max-w-md text-sm">Tidak ada jadwal kegiatan luar di bulan ini.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {filteredEvents.map((acara) => {
+            const dataAbsen = cekDataAbsen(acara);
+            const isHariIni = acara.tanggal === hariIniStr;
+
+            return (
+              <div 
+                key={acara.id} 
+                onClick={() => openModal(acara)}
+                className={`group cursor-pointer bg-white rounded-3xl border transition-all duration-300 overflow-hidden flex flex-col hover:-translate-y-1 hover:shadow-xl ${isHariIni ? 'border-indigo-300 shadow-md ring-2 ring-indigo-50' : 'border-slate-200 shadow-sm'}`}
+              >
+                <div className={`p-5 border-b flex justify-between items-start ${isHariIni ? 'bg-indigo-50 border-indigo-100' : 'bg-slate-50/50 border-slate-100'}`}>
+                  <div className={`p-2.5 rounded-xl ${isHariIni ? 'bg-indigo-500 text-white shadow-md' : 'bg-white border border-slate-200 text-slate-400 group-hover:text-indigo-500'}`}>
+                    <Calendar className="h-5 w-5" />
+                  </div>
+                  {isHariIni && <span className="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider animate-pulse">Hari Ini</span>}
+                </div>
+                
+                <div className="p-5 flex-1 flex flex-col justify-between">
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-800 leading-tight mb-2 group-hover:text-indigo-600 transition-colors">{acara.nama_acara}</h3>
+                    <p className="text-sm font-bold text-slate-500 mb-4">{acara.tanggal}</p>
+                  </div>
+                  
+                  {/* Status Tampilan Kotak */}
+                  <div className="mt-4 pt-4 border-t border-slate-100">
+                    {dataAbsen && dataAbsen.waktu_pulang ? (
+                      <div className="flex items-center justify-between text-emerald-700 bg-emerald-50 px-3 py-2 rounded-xl text-[11px] font-bold border border-emerald-100">
+                        <span><MapPin className="h-3 w-3 inline mb-0.5" /> {dataAbsen.waktu_absen}</span>
+                        <span><LogOutIcon className="h-3 w-3 inline mb-0.5" /> {dataAbsen.waktu_pulang}</span>
+                      </div>
+                    ) : dataAbsen && !dataAbsen.waktu_pulang ? (
+                      <div className="flex items-center justify-between text-indigo-700 bg-indigo-50 px-3 py-2 rounded-xl text-[11px] font-bold border border-indigo-100 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                        <span><MapPin className="h-3 w-3 inline mb-0.5" /> {dataAbsen.waktu_absen}</span>
+                        <span>Berlangsung...</span>
+                      </div>
+                    ) : isHariIni ? (
+                      <div className="flex items-center justify-center gap-2 text-indigo-600 bg-indigo-50 px-3 py-2 rounded-xl text-xs font-bold border border-indigo-100 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                        <MapPin className="h-4 w-4" /> Klik untuk Absen Masuk
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 text-slate-400 bg-slate-50 px-3 py-2 rounded-xl text-xs font-bold border border-slate-100">
+                        <Clock4 className="h-4 w-4" /> Lihat Detail Acara
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {selectedAcara && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={closeModal}></div>
+          
+          <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-lg relative z-10 animate-in zoom-in-95 duration-200 overflow-hidden border border-white/20">
+            <div className="bg-gradient-to-r from-indigo-50 to-white p-6 border-b border-indigo-100 flex justify-between items-start">
+              <div>
+                <span className="inline-block bg-indigo-100 text-indigo-700 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3 border border-indigo-200">Formulir Kehadiran</span>
+                <h3 className="text-2xl font-bold text-slate-800 leading-tight">{selectedAcara.nama_acara}</h3>
+                <p className="text-sm font-bold text-slate-500 mt-2 flex items-center gap-1.5"><Calendar className="h-4 w-4" /> Jadwal: {selectedAcara.tanggal}</p>
+              </div>
+              <button onClick={closeModal} className="p-2 bg-white rounded-full border border-slate-200 text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors shadow-sm">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 md:p-8 space-y-6">
+              <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 flex items-start gap-3">
+                <MapPin className="h-5 w-5 text-indigo-500 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-bold text-slate-700">Status Pelacakan Lokasi</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {selectedAcara.wajib_gps ? `Diwajibkan berada di area lokasi acara (Radius toleransi ${selectedAcara.radius} meter).` : "Bebas Lokasi. Anda dapat mencatat kehadiran dari mana saja tanpa sensor satelit."}
+                  </p>
+                </div>
+              </div>
+
+              {pesan.error && <div className="p-4 bg-red-50 text-red-700 border border-red-200 rounded-xl text-sm flex gap-3 shadow-sm font-medium animate-in slide-in-from-top-2"><AlertTriangle className="h-5 w-5 shrink-0" /> {pesan.error}</div>}
+              {pesan.success && <div className="p-4 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl text-sm flex gap-3 shadow-sm font-bold animate-in slide-in-from-top-2"><CheckCircle className="h-5 w-5 shrink-0" /> {pesan.success}</div>}
+
+              {/* LOGIKA TOMBOL MASUK DAN PULANG */}
+              {(() => {
+                const dataAbsen = cekDataAbsen(selectedAcara);
+                
+                // 1. Kondisi: Sudah Absen Pulang (Selesai)
+                if (dataAbsen && dataAbsen.waktu_pulang) {
+                  return (
+                    <div className="w-full bg-emerald-50 text-emerald-600 font-bold py-4 rounded-2xl flex justify-between items-center px-6 border border-emerald-200 shadow-inner">
+                      <span className="flex items-center gap-2"><CheckCircle className="h-5 w-5" /> Acara Selesai</span>
+                      <span className="font-mono text-xs">{dataAbsen.waktu_absen} - {dataAbsen.waktu_pulang}</span>
+                    </div>
+                  );
+                } 
+                
+                // 2. Kondisi: Sudah Absen Masuk, Belum Pulang
+                if (dataAbsen && !dataAbsen.waktu_pulang) {
+                  return (
+                    <button 
+                      onClick={() => handleAbsenAcara("pulang")} 
+                      disabled={isLocating}
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-2xl shadow-lg transition-all active:scale-95 flex justify-center items-center gap-2"
+                    >
+                      {isLocating ? <RefreshCw className="h-5 w-5 animate-spin" /> : <LogOutIcon className="h-5 w-5" />}
+                      {isLocating ? "Memverifikasi Kepulangan..." : "Catat Waktu Pulang Acara"}
+                    </button>
+                  );
+                }
+
+                // 3. Kondisi: Belum Hari H
+                if (selectedAcara.tanggal !== hariIniStr) {
+                  return (
+                    <div className="w-full bg-slate-100 text-slate-400 font-bold py-4 rounded-2xl flex justify-center items-center gap-2 border border-slate-200 cursor-not-allowed">
+                      <Clock4 className="h-5 w-5" /> Absen Terkunci (Bukan Hari H)
+                    </div>
+                  );
+                }
+
+                // 4. Kondisi: Hari H & Belum Absen Sama Sekali
+                return (
+                  <button 
+                    onClick={() => handleAbsenAcara("masuk")} 
+                    disabled={isLocating}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl shadow-lg transition-all active:scale-95 flex justify-center items-center gap-2"
+                  >
+                    {isLocating ? <RefreshCw className="h-5 w-5 animate-spin" /> : <MapPin className="h-5 w-5" />}
+                    {isLocating ? "Memverifikasi Kedatangan..." : "Catat Kehadiran Masuk"}
+                  </button>
+                );
+              })()}
+
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
 // --- KOMPONEN: MODUL PRESENSI ---
 // ============================================================================
 const AbsenScreen = ({ user }) => {
@@ -459,6 +773,7 @@ const AbsenScreen = ({ user }) => {
     setIsLocating(true);
     setErrorMsg("");
     setSuccessMsg("");
+
     if (!navigator.geolocation) {
       setErrorMsg("Browser Anda tidak mendukung GPS.");
       setIsLocating(false);
@@ -467,116 +782,85 @@ const AbsenScreen = ({ user }) => {
 
     navigator.geolocation.getCurrentPosition(
       async (position) => {
-        const jarakMeter = Math.round(
-          calculateDistance(
-            position.coords.latitude,
-            position.coords.longitude,
-            SCHOOL_LOCATION.latitude,
-            SCHOOL_LOCATION.longitude
-          )
-        );
-
-        if (jarakMeter <= SCHOOL_LOCATION.radiusAllowedMeters) {
-          try {
-            const now = new Date();
-            const tanggalStr = getTodayDateString();
-            const waktuStr = getCurrentTimeString();
-
-            if (mode === "masuk") {
-              if (todayRecord) {
-                setSuccessMsg(`Anda sudah mencatat kehadiran hari ini pada ${todayRecord.waktu_absen || "-"} WIB.`);
-                setIsLocating(false);
-                return;
-              }
-
-              let batasJam = 6, batasMenit = 50;
-              try {
-                const { data: config } = await supabase
-                  .from("pengaturan")
-                  .select("waktu_batas")
-                  .limit(1)
-                  .single();
-                if (config && config.waktu_batas) {
-                  const p = config.waktu_batas.split(":");
-                  batasJam = parseInt(p[0]);
-                  batasMenit = parseInt(p[1]);
-                }
-              } catch (e) {}
-
-              const jamMaksimal = new Date();
-              jamMaksimal.setHours(batasJam, batasMenit, 0, 0);
-              const statusAbsen = now <= jamMaksimal ? "Tepat Waktu" : "Terlambat";
-
-              const { error } = await supabase.from("absensi").insert([
-                {
-                  nip_guru: user.username,
-                  nama_guru: user.name,
-                  tanggal: tanggalStr,
-                  waktu_absen: waktuStr,
-                  status: statusAbsen,
-                  jarak: `${jarakMeter} Meter`,
-                  jenis_absen: "Hadir",
-                },
-              ]);
-
-              if (error) throw error;
-              setSuccessMsg(
-                `BERHASIL: Tercatat pukul ${waktuStr} WIB. Jarak Anda Dari Sekolah: ${jarakMeter}m.`
-              );
-              fetchTodayRecord();
-            } else if (mode === "pulang") {
-              if (!todayRecord) {
-                setErrorMsg(
-                  "Gagal: Anda belum melakukan Absen Masuk hari ini!"
-                );
-                setIsLocating(false);
-                return;
-              }
-              if (todayRecord.waktu_pulang) {
-                setSuccessMsg(`Anda sudah Absen Pulang hari ini pada ${todayRecord.waktu_pulang} WIB,  :).`);
-                setIsLocating(false);
-                return;
-              }
-
-              // ====================================================================
-              // --- LOGIKA BARU: VALIDASI SOP JAM PULANG (MINIMAL JAM 16:00) ---
-              // ====================================================================
-              const currentHour = new Date().getHours();
-              // getHours() mengembalikan format 24 jam (0-23). Jika kurang dari 16, tolak!
-              if (currentHour < 16) {
-                setErrorMsg(
-                  "Mohon maaf, saat ini sistem belum dapat menerima absensi Anda. Sesuai SOP Sekolah, mohon lakukan absensi tepat pada pukul 16.00. Terima kasih atas kerja samanya."
-                );
-                setIsLocating(false);
-                return; // Return menghentikan proses sehingga data tidak dikirim ke Supabase
-              }
-              // ====================================================================
-
-              const { error } = await supabase
-                .from("absensi")
-                .update({ waktu_pulang: waktuStr })
-                .eq("id", todayRecord.id);
-              if (error) throw error;
-              
-              setSuccessMsg(
-                `ABSEN PULANG BERHASIL! Tercatat pada ${waktuStr} WIB, Terima kasih ya sudah absen sesuai ketentuan SOP! Selamat melanjutkan aktivitas kembali, semoga harimu menyenangkan dan berkah selalu.`
-              );
-              fetchTodayRecord();
-            }
-          } catch (err) {
-            setErrorMsg(`Gagal: ${err.message}`);
-          }
-        } else {
-          setErrorMsg(
-            `AKSES DITOLAK: Anda berada di luar radius sekolah. Jarak Anda: ${jarakMeter} meter.`
+        try {
+          const jarakMeter = Math.round(
+            calculateDistance(position.coords.latitude, position.coords.longitude, SCHOOL_LOCATION.latitude, SCHOOL_LOCATION.longitude)
           );
+
+          if (jarakMeter > SCHOOL_LOCATION.radiusAllowedMeters) {
+            setErrorMsg(`AKSES DITOLAK: Anda berada di luar radius sekolah. Jarak Anda: ${jarakMeter} meter (Maksimal: 25m).`);
+            setIsLocating(false);
+            return;
+          }
+
+          const now = new Date();
+          const tanggalStr = getTodayDateString();
+          const waktuStr = getCurrentTimeString();
+
+          if (mode === "masuk") {
+            if (todayRecord) {
+              setSuccessMsg(`Anda sudah mencatat kehadiran hari ini pada ${todayRecord.waktu_absen || "-"} WIB.`);
+              setIsLocating(false);
+              return;
+            }
+
+            let batasJam = 6, batasMenit = 50;
+            const { data: config } = await supabase.from("pengaturan").select("waktu_batas").eq("id", 1).single();
+            if (config && config.waktu_batas) {
+              const p = config.waktu_batas.split(":");
+              batasJam = parseInt(p[0]);
+              batasMenit = parseInt(p[1]);
+            }
+
+            const jamMaksimal = new Date();
+            jamMaksimal.setHours(batasJam, batasMenit, 0, 0);
+            const statusAbsen = now <= jamMaksimal ? "Tepat Waktu" : "Terlambat";
+
+            const { error } = await supabase.from("absensi").insert([{
+              nip_guru: user.username,
+              nama_guru: user.name,
+              tanggal: tanggalStr,
+              waktu_absen: waktuStr,
+              status: statusAbsen,
+              jarak: `${jarakMeter} Meter`,
+              jenis_absen: "Hadir",
+            }]);
+
+            if (error) throw error;
+            setSuccessMsg(`BERHASIL: Tercatat pukul ${waktuStr} WIB. Jarak Anda: ${jarakMeter}m.`);
+            fetchTodayRecord();
+            
+          } else if (mode === "pulang") {
+            if (!todayRecord) {
+              setErrorMsg("Gagal: Anda belum melakukan Absen Masuk hari ini!");
+              setIsLocating(false);
+              return;
+            }
+            if (todayRecord.waktu_pulang) {
+              setSuccessMsg(`Anda sudah Absen Pulang hari ini pada ${todayRecord.waktu_pulang} WIB, :).`);
+              setIsLocating(false);
+              return;
+            }
+
+            if (now.getHours() < 16) {
+              setErrorMsg("Sesuai SOP Sekolah, mohon lakukan absensi pulang tepat pada atau setelah pukul 16.00.");
+              setIsLocating(false);
+              return;
+            }
+
+            const { error } = await supabase.from("absensi").update({ waktu_pulang: waktuStr }).eq("id", todayRecord.id);
+            if (error) throw error;
+            
+            setSuccessMsg(`ABSEN PULANG BERHASIL! Tercatat pada ${waktuStr} WIB.`);
+            fetchTodayRecord();
+          }
+        } catch (err) {
+          setErrorMsg(`Gagal: ${err.message}`);
         }
         setIsLocating(false);
       },
       (error) => {
-        setErrorMsg(
-          "Gagal Memindai Satelit GPS. Pastikan Izin Lokasi Anda Menyala."
-        );
+        setErrorMsg("Gagal memindai GPS. Pastikan izin lokasi perangkat aktif.");
         setIsLocating(false);
       },
       gpsOptions
@@ -667,7 +951,7 @@ const AbsenScreen = ({ user }) => {
       </div>
 
       <div className="p-6 md:p-8 text-center relative overflow-hidden">
-        {errorMsg && (
+      {errorMsg && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-2xl flex items-start gap-3 text-left">
             <AlertTriangle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
             <p className="text-sm text-red-700 font-medium">{errorMsg}</p>
@@ -680,126 +964,170 @@ const AbsenScreen = ({ user }) => {
           </div>
         )}
 
-        {activeTab === "masuk" && (
-          <div className="animate-in slide-in-from-right-4 duration-300">
-            <div className="inline-flex items-center justify-center w-20 h-20 bg-emerald-50 rounded-full mb-5 border-2 border-emerald-100">
-              <MapPin className="h-8 w-8 text-emerald-600" />
+        {/* LOGIKA PENGUNCI EXPERT: JIKA SUDAH ABSEN ACARA, KUNCI SEMUA MODUL REGULER */}
+        {todayRecord && todayRecord.jenis_absen?.includes("Acara") ? (
+          <div className="animate-in zoom-in-95 duration-300 py-6">
+            <div className="inline-flex items-center justify-center w-20 h-20 bg-indigo-50 rounded-full mb-5 border-2 border-indigo-100 shadow-inner">
+              <Ticket className="h-8 w-8 text-indigo-500" />
             </div>
-            <h2 className="text-xl font-bold text-slate-800 mb-2 font-serif">
-              Pindai Lokasi Masuk Anda
-            </h2>
-            <p className="text-slate-500 mb-6 text-sm max-w-sm mx-auto">
-              Pastikan Anda berada di dalam area sekolah.
-            </p>
-            <button
-              onClick={() => handleAbsenGPS("masuk")}
-              disabled={isLocating}
-              className="w-full max-w-sm mx-auto py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition-all"
-            >
-              {isLocating ? "Memindai..." : "Catat Kehadiran Masuk"}
-            </button>
-          </div>
-        )}
-
-        {activeTab === "pulang" && (
-          <div className="animate-in slide-in-from-right-4 duration-300">
-            <div className="inline-flex items-center justify-center w-20 h-20 bg-indigo-50 rounded-full mb-5 border-2 border-indigo-100">
-              <LogOutIcon className="h-8 w-8 text-indigo-600" />
+            <h2 className="text-xl font-bold text-slate-800 mb-2 font-serif">Modul Absensi Reguler Terkunci</h2>
+            <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-5 mt-4 max-w-md mx-auto text-left flex items-start gap-3 shadow-sm">
+              <Info className="h-5 w-5 text-indigo-600 shrink-0 mt-0.5" />
+              <p className="text-sm text-indigo-800 leading-relaxed font-medium">
+                Sistem mendeteksi Anda telah mencatat kehadiran untuk kegiatan <strong className="text-indigo-900 border-b border-indigo-300">{todayRecord.jenis_absen}</strong> hari ini.
+                <br className="mb-3"/>
+                <span className="text-xs text-indigo-600 opacity-90 block mt-2">Seluruh proses presensi kepulangan dikelola khusus melalui menu <b>Presensi Acara</b>. Anda tidak dapat mengisi absen reguler atau izin di halaman ini.</span>
+              </p>
             </div>
-            <h2 className="text-xl font-bold text-slate-800 mb-2 font-serif">
-              Pindai Lokasi Pulang Anda
-            </h2>
-            <p className="text-slate-500 mb-6 text-sm max-w-sm mx-auto">
-              Akhiri jam kerja Anda hari ini. Sistem akan memperbarui rekam
-              jejak kepulangan.
-            </p>
-            <button
-              onClick={() => handleAbsenGPS("pulang")}
-              disabled={isLocating}
-              className="w-full max-w-sm mx-auto py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition-all"
-            >
-              {isLocating ? "Memindai..." : "Catat Waktu Pulang"}
-            </button>
           </div>
-        )}
-
-        {activeTab === "izin" && (
-          <div className="animate-in slide-in-from-right-4 duration-300 text-left max-w-sm mx-auto">
-            {todayRecord && todayRecord.jenis_absen !== "Hadir" ? (
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center">
-                <div className="bg-amber-100 h-16 w-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <FileText className="h-8 w-8 text-amber-600" />
+        ) : (
+          <>
+            {/* TAMPILAN NORMAL JIKA BUKAN HARI ACARA */}
+            {activeTab === "masuk" && (
+              <div className="animate-in slide-in-from-right-4 duration-300">
+                <div className="inline-flex items-center justify-center w-20 h-20 bg-emerald-50 rounded-full mb-5 border-2 border-emerald-100">
+                  <MapPin className="h-8 w-8 text-emerald-600" />
                 </div>
-                <h3 className="font-bold text-lg mb-1">Status Pengajuan</h3>
-                <p className="text-sm text-slate-500 mb-4">
-                  Anda telah mengajukan form {todayRecord.jenis_absen} hari ini.
-                </p>
-                <div
-                  className={`py-2 px-4 rounded-xl font-bold text-sm ${
-                    todayRecord.status === "Menunggu Validasi"
-                      ? "bg-amber-100 text-amber-700"
-                      : todayRecord.status === "Diizinkan"
-                      ? "bg-emerald-100 text-emerald-700"
-                      : "bg-red-100 text-red-700"
-                  }`}
-                >
-                  Status: {todayRecord.status}
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handleAjukanIzin} className="space-y-4">
-                <div className="flex items-center gap-3 mb-6">
-                  <div className="bg-amber-100 p-2.5 rounded-xl">
-                    <FileText className="h-6 w-6 text-amber-600" />
-                  </div>
-                  <div>
-                    <h2 className="font-bold text-lg text-slate-800">
-                      Form Pengajuan
-                    </h2>
-                    <p className="text-xs text-slate-500">
-                      Izin tidak hadir / Sakit
-                    </p>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
-                    Kategori
-                  </label>
-                  <select
-                    value={jenisIzin}
-                    onChange={(e) => setJenisIzin(e.target.value)}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl text-sm bg-white"
-                  >
-                    <option value="Sakit">Kondisi Sakit</option>
-                    <option value="Izin">Izin Keperluan Lain</option>
-                    <option value="Dinas Luar">Tugas Dinas Luar</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">
-                    Alasan Lengkap
-                  </label>
-                  <textarea
-                    required
-                    value={keteranganIzin}
-                    onChange={(e) => setKeteranganIzin(e.target.value)}
-                    placeholder="Tuliskan alasan..."
-                    rows="3"
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl text-sm resize-none"
-                  ></textarea>
-                </div>
-                <button
-                  type="submit"
-                  disabled={isLocating}
-                  className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-md transition-all mt-2"
-                >
-                  {isLocating ? "Memproses..." : "Kirim Pengajuan"}
+                <h2 className="text-xl font-bold text-slate-800 mb-2 font-serif">Pindai Lokasi Masuk Anda</h2>
+                <p className="text-slate-500 mb-6 text-sm max-w-sm mx-auto">Pastikan Anda berada di dalam area sekolah.</p>
+                <button onClick={() => handleAbsenGPS("masuk")} disabled={isLocating} className="w-full max-w-sm mx-auto py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition-all">
+                  {isLocating ? "Memindai..." : "Catat Kehadiran Masuk"}
                 </button>
-              </form>
+              </div>
             )}
-          </div>
+
+            {activeTab === "pulang" && (
+              <div className="animate-in slide-in-from-right-4 duration-300">
+                <div className="inline-flex items-center justify-center w-20 h-20 bg-indigo-50 rounded-full mb-5 border-2 border-indigo-100">
+                  <LogOutIcon className="h-8 w-8 text-indigo-600" />
+                </div>
+                <h2 className="text-xl font-bold text-slate-800 mb-2 font-serif">Pindai Lokasi Pulang Anda</h2>
+                <p className="text-slate-500 mb-6 text-sm max-w-sm mx-auto">Akhiri jam kerja Anda hari ini. Sistem akan memperbarui rekam jejak kepulangan.</p>
+                <button onClick={() => handleAbsenGPS("pulang")} disabled={isLocating} className="w-full max-w-sm mx-auto py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition-all">
+                  {isLocating ? "Memindai..." : "Catat Waktu Pulang"}
+                </button>
+              </div>
+            )}
+
+            {activeTab === "izin" && (
+              <div className="animate-in slide-in-from-right-4 duration-300 text-left max-w-sm mx-auto">
+                {todayRecord && todayRecord.jenis_absen !== "Hadir" ? (
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center">
+                    <div className="bg-amber-100 h-16 w-16 rounded-full flex items-center justify-center mx-auto mb-4"><FileText className="h-8 w-8 text-amber-600" /></div>
+                    <h3 className="font-bold text-lg mb-1">Status Pengajuan</h3>
+                    <p className="text-sm text-slate-500 mb-4">Anda telah mengajukan form {todayRecord.jenis_absen} hari ini.</p>
+                    <div className={`py-2 px-4 rounded-xl font-bold text-sm ${todayRecord.status === "Menunggu Validasi" ? "bg-amber-100 text-amber-700" : todayRecord.status === "Diizinkan" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
+                      Status: {todayRecord.status}
+                    </div>
+                  </div>
+                ) : (
+                  <form onSubmit={handleAjukanIzin} className="space-y-4">
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="bg-amber-100 p-2.5 rounded-xl"><FileText className="h-6 w-6 text-amber-600" /></div>
+                      <div><h2 className="font-bold text-lg text-slate-800">Form Pengajuan</h2><p className="text-xs text-slate-500">Izin tidak hadir / Sakit</p></div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Kategori</label>
+                      <select value={jenisIzin} onChange={(e) => setJenisIzin(e.target.value)} className="w-full px-4 py-3 border border-slate-300 rounded-xl text-sm bg-white">
+                        <option value="Sakit">Kondisi Sakit</option>
+                        <option value="Izin">Izin Keperluan Lain</option>
+                        <option value="Dinas Luar">Tugas Dinas Luar</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Alasan Lengkap</label>
+                      <textarea required value={keteranganIzin} onChange={(e) => setKeteranganIzin(e.target.value)} placeholder="Tuliskan alasan..." rows="3" className="w-full px-4 py-3 border border-slate-300 rounded-xl text-sm resize-none"></textarea>
+                    </div>
+                    <button type="submit" disabled={isLocating} className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-md transition-all mt-2">
+                      {isLocating ? "Memproses..." : "Kirim Pengajuan"}
+                    </button>
+                  </form>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// --- KOMPONEN GURU: JADWAL MENGAJAR (JadwalScreen) ---
+// ============================================================================
+const JadwalScreen = ({ user }) => {
+  const [jadwalList, setJadwalList] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchJadwal = async () => {
+      setIsLoading(true);
+      // Mengambil data jadwal mengajar khusus untuk guru yang sedang login (Super Cepat)
+      const { data } = await supabase.from("jadwal").select("*").eq("nip_guru", user.username).order("hari");
+      setJadwalList(data || []);
+      setIsLoading(false);
+    };
+    fetchJadwal();
+  }, [user.username]);
+
+  return (
+    <div className="bg-white p-6 md:p-10 rounded-3xl shadow-sm border border-slate-200 animate-in fade-in duration-500 max-w-7xl mx-auto">
+      <div className="flex items-center gap-4 mb-8 border-b border-slate-100 pb-6">
+        <div className="bg-emerald-100 p-3 rounded-2xl">
+          <BookOpen className="h-8 w-8 text-emerald-600" />
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-slate-800 font-serif">Jadwal Mengajar Mingguan</h2>
+          <p className="text-sm text-slate-500 mt-1">Daftar lengkap sesi akademik Anda.</p>
+        </div>
+      </div>
+      
+      {isLoading ? (
+        <div className="py-12 text-center text-slate-500">
+          <RefreshCw className="h-8 w-8 animate-spin text-emerald-500 mx-auto mb-4" />
+          <p>Memuat jadwal...</p>
+        </div>
+      ) : jadwalList.length === 0 ? (
+        <div className="py-12 text-center text-slate-500 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
+          <p className="font-medium text-slate-600">Belum ada jadwal akademik ditugaskan.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+          {["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"].map((hari) => {
+            const jadwalHari = jadwalList.filter((j) => j.hari === hari);
+            if (jadwalHari.length === 0) return null;
+            return (
+              <div key={hari} className="bg-slate-50/70 rounded-3xl p-6 border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="bg-emerald-600 text-white p-2 rounded-xl shadow-md"><Calendar className="h-5 w-5" /></div>
+                  <h3 className="font-bold text-xl text-slate-800 font-serif tracking-wide">{hari}</h3>
+                </div>
+                <div className="space-y-4">
+                  {jadwalHari.map((item) => (
+                    <div key={item.id} className="relative bg-white rounded-2xl p-5 shadow-sm border border-slate-100 overflow-hidden hover:-translate-y-0.5 transition-transform">
+                      <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b from-emerald-400 to-teal-600"></div>
+                      <div className="pl-2">
+                        <span className="bg-slate-50 text-slate-600 font-mono text-sm font-bold px-3 py-1.5 rounded-lg border border-slate-200">
+                          <Clock4 className="h-4 w-4 inline mr-1 text-emerald-600" /> {item.jam}
+                        </span>
+                        <p className="font-bold text-slate-900 text-lg mt-3 mb-4 leading-tight">{item.mapel}</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-lg text-[11px] uppercase font-bold border border-indigo-100">
+                            <Users className="h-3.5 w-3.5 inline mr-1" /> {item.kelas}
+                          </div>
+                          <div className="bg-amber-50 text-amber-700 px-3 py-1.5 rounded-lg text-[11px] uppercase font-bold border border-amber-100">
+                            <MapPin className="h-3.5 w-3.5 inline mr-1" /> {item.ruang}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -826,16 +1154,9 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
   useEffect(() => {
     const fetchData = async () => {
       setIsLoading(true);
-      const resJadwal = await supabase
-        .from("jadwal")
-        .select("*")
-        .eq("nip_guru", user.username);
+      const resJadwal = await supabase.from("jadwal").select("*").eq("nip_guru", user.username);
       if (!resJadwal.error) setJadwalList(resJadwal.data || []);
-      const resAbsen = await supabase
-        .from("absensi")
-        .select("*")
-        .eq("nip_guru", user.username)
-        .order("id", { ascending: false });
+      const resAbsen = await supabase.from("absensi").select("*").eq("nip_guru", user.username).order("id", { ascending: false });
       if (!resAbsen.error) setRiwayatAbsen(resAbsen.data || []);
       setIsLoading(false);
     };
@@ -844,9 +1165,7 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
 
   const hariIni = new Date().toLocaleDateString("id-ID", { weekday: "long" });
   const tglHariIni = getTodayDateString();
-  const jdwlHariIni = jadwalList.filter(
-    (j) => j.hari?.toLowerCase() === hariIni.toLowerCase()
-  );
+  const jdwlHariIni = jadwalList.filter((j) => j.hari?.toLowerCase() === hariIni.toLowerCase());
   const absHariIni = riwayatAbsen.find((a) => a.tanggal === tglHariIni);
 
   const filteredRiwayat = riwayatAbsen.filter((a) => {
@@ -855,26 +1174,16 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
     return false;
   });
 
-  const statHadir = filteredRiwayat.filter(
-    (a) => a.jenis_absen === "Hadir"
-  ).length;
-  const statTelat = filteredRiwayat.filter(
-    (a) => a.status === "Terlambat"
-  ).length;
-  const statIzin = filteredRiwayat.filter(
-    (a) => a.jenis_absen !== "Hadir"
-  ).length;
+  // FIX LOGIKA STATUS
+  const statHadir = filteredRiwayat.filter((a) => a.jenis_absen?.includes("Hadir")).length;
+  const statTelat = filteredRiwayat.filter((a) => a.status === "Terlambat").length;
+  const statIzin = filteredRiwayat.filter((a) => !a.jenis_absen?.includes("Hadir")).length;
 
   const totalPages = Math.ceil(filteredRiwayat.length / itemsPerPage);
-  const paginatedRiwayat = filteredRiwayat.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
+  const paginatedRiwayat = filteredRiwayat.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
-  // --- FUNGSI NATIVE PDF ANTI-POTONG (FIXED CSS) ---
   const handleDownloadPDF = () => {
-    if (filteredRiwayat.length === 0)
-      return alert("Tidak ada data rekam jejak untuk dicetak pada bulan ini.");
+    if (filteredRiwayat.length === 0) return alert("Tidak ada data rekam jejak untuk dicetak pada bulan ini.");
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       alert("Pop-up diblokir oleh browser! Mohon izinkan pop-up (Allow Pop-ups) untuk mendownload PDF.");
@@ -940,20 +1249,16 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
               </tr>
             </thead>
             <tbody>
-              ${filteredRiwayat
-                .map(
-                  (r) => `
+              ${filteredRiwayat.map((r) => `
                 <tr>
                   <td><strong>${r.tanggal}</strong></td>
                   <td>${r.jenis_absen || "Hadir"}</td>
-                  <td>${r.jenis_absen !== "Hadir" ? r.keterangan || "-" : "-"}</td>
-                  <td style="font-family: monospace;">${r.jenis_absen === "Hadir" ? r.waktu_absen || "-" : "-"}</td>
+                  <td>${!r.jenis_absen?.includes("Hadir") ? r.keterangan || "-" : "-"}</td>
+                  <td style="font-family: monospace;">${r.jenis_absen?.includes("Hadir") ? r.waktu_absen || "-" : "-"}</td>
                   <td style="font-family: monospace;">${r.waktu_pulang || "-"}</td>
                   <td>${r.status}</td>
                 </tr>
-              `
-                )
-                .join("")}
+              `).join("")}
             </tbody>
           </table>
           <div class="footer">
@@ -961,11 +1266,7 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
             <p>Pencetakan tidak memerlukan tanda tangan basah karena telah tervalidasi oleh Database Satelit.</p>
           </div>
           <script>
-            window.onload = function() { 
-              setTimeout(function() {
-                window.print();
-              }, 500); 
-            };
+            window.onload = function() { setTimeout(function() { window.print(); }, 500); };
           </script>
         </body>
       </html>
@@ -980,17 +1281,10 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
           <div className="bg-gradient-to-r from-emerald-800 to-teal-700 rounded-3xl p-6 sm:p-8 text-white shadow-lg relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
             <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4"></div>
             <div className="relative z-10">
-              <h1 className="text-2xl sm:text-3xl font-bold font-serif mb-2 tracking-wide">
-                Selamat Datang, {user?.name}
-              </h1>
-              <p className="text-emerald-100 text-sm max-w-xl leading-relaxed">
-                Semoga hari ini penuh berkah. Jangan lupa presensi kehadiran anda.
-              </p>
+              <h1 className="text-2xl sm:text-3xl font-bold font-serif mb-2 tracking-wide">Selamat Datang, {user?.name}</h1>
+              <p className="text-emerald-100 text-sm max-w-xl leading-relaxed">Semoga hari ini penuh berkah. Jangan lupa presensi kehadiran anda.</p>
             </div>
-            <button
-              onClick={() => setActiveMenu("absen")}
-              className="relative z-10 whitespace-nowrap bg-white text-emerald-800 px-6 py-3.5 rounded-xl font-bold text-sm shadow-md hover:bg-emerald-50 transition-all flex items-center justify-center gap-2"
-            >
+            <button onClick={() => setActiveMenu("absen")} className="relative z-10 whitespace-nowrap bg-white text-emerald-800 px-6 py-3.5 rounded-xl font-bold text-sm shadow-md hover:bg-emerald-50 transition-all flex items-center justify-center gap-2">
               <MapPin className="h-5 w-5" /> Buka Presensi Guru
             </button>
           </div>
@@ -1000,106 +1294,52 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
               <LiveClockWidget />
 
               <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-                <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                  <Activity className="h-5 w-5 text-amber-500" /> Status Hari
-                  Ini
-                </h3>
+                <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Activity className="h-5 w-5 text-amber-500" /> Status Hari Ini</h3>
                 {absHariIni ? (
-                  <div
-                    className={`border rounded-xl p-5 text-center ${
-                      absHariIni.jenis_absen === "Hadir"
-                        ? "bg-emerald-50 border-emerald-100"
-                        : "bg-amber-50 border-amber-100"
-                    }`}
-                  >
-                    <p
-                      className={`font-bold text-lg mb-4 ${
-                        absHariIni.jenis_absen === "Hadir"
-                          ? "text-emerald-800"
-                          : "text-amber-800"
-                      }`}
-                    >
-                      {absHariIni.jenis_absen === "Hadir"
-                        ? "Hadir di Sekolah"
-                        : absHariIni.jenis_absen}
+                  <div className={`border rounded-xl p-5 text-center ${absHariIni.jenis_absen?.includes("Hadir") ? "bg-emerald-50 border-emerald-100" : "bg-amber-50 border-amber-100"}`}>
+                    <p className={`font-bold text-lg mb-4 ${absHariIni.jenis_absen?.includes("Hadir") ? "text-emerald-800" : "text-amber-800"}`}>
+                      {absHariIni.jenis_absen === "Hadir" ? "Hadir di Sekolah" : absHariIni.jenis_absen}
                     </p>
-                    {absHariIni.jenis_absen === "Hadir" ? (
+                    {absHariIni.jenis_absen?.includes("Hadir") ? (
                       <div className="flex justify-center items-center gap-4 text-xs font-medium">
                         <div className="text-emerald-600 bg-emerald-100/50 p-2 rounded-lg">
-                          <span className="block text-slate-500 mb-0.5 text-[10px] uppercase font-bold">
-                            Jam Masuk
-                          </span>
-                          <span className="font-mono text-sm">
-                            {absHariIni.waktu_absen || "-"}
-                          </span>
+                          <span className="block text-slate-500 mb-0.5 text-[10px] uppercase font-bold">Jam Masuk</span>
+                          <span className="font-mono text-sm">{absHariIni.waktu_absen || "-"}</span>
                         </div>
-                        <div className="text-slate-300">
-                          <ArrowRight className="h-4 w-4" />
-                        </div>
+                        <div className="text-slate-300"><ArrowRight className="h-4 w-4" /></div>
                         <div className="text-indigo-600 bg-indigo-50 p-2 rounded-lg">
-                          <span className="block text-slate-500 mb-0.5 text-[10px] uppercase font-bold">
-                            Jam Pulang
-                          </span>
-                          <span className="font-mono text-sm">
-                            {absHariIni.waktu_pulang || "Belum"}
-                          </span>
+                          <span className="block text-slate-500 mb-0.5 text-[10px] uppercase font-bold">Jam Pulang</span>
+                          <span className="font-mono text-sm">{absHariIni.waktu_pulang || "Belum"}</span>
                         </div>
                       </div>
                     ) : (
-                      <p
-                        className={`text-sm font-bold p-2 rounded-lg ${
-                          absHariIni.status === "Diizinkan"
-                            ? "text-emerald-700 bg-emerald-100"
-                            : absHariIni.status === "Ditolak"
-                            ? "text-red-700 bg-red-100"
-                            : "text-amber-700 bg-amber-100"
-                        }`}
-                      >
+                      <p className={`text-sm font-bold p-2 rounded-lg ${absHariIni.status === "Diizinkan" ? "text-emerald-700 bg-emerald-100" : absHariIni.status === "Ditolak" ? "text-red-700 bg-red-100" : "text-amber-700 bg-amber-100"}`}>
                         Status: {absHariIni.status}
                       </p>
                     )}
                   </div>
                 ) : (
                   <div className="bg-slate-50 border border-slate-100 rounded-xl p-6 text-center">
-                    <div className="inline-flex bg-slate-200 p-3.5 rounded-full mb-3">
-                      <Clock4 className="h-6 w-6 text-slate-500" />
-                    </div>
-                    <p className="text-slate-800 font-bold text-lg">
-                      Belum Ada Catatan
-                    </p>
+                    <div className="inline-flex bg-slate-200 p-3.5 rounded-full mb-3"><Clock4 className="h-6 w-6 text-slate-500" /></div>
+                    <p className="text-slate-800 font-bold text-lg">Belum Ada Catatan</p>
                   </div>
                 )}
               </div>
 
               <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
-                <h3 className="font-bold text-slate-800 mb-4 text-xs uppercase tracking-wider flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4 text-emerald-500" /> Ringkasan
-                  Bulan Ini
-                </h3>
+                <h3 className="font-bold text-slate-800 mb-4 text-xs uppercase tracking-wider flex items-center gap-2"><BarChart3 className="h-4 w-4 text-emerald-500" /> Ringkasan Bulan Ini</h3>
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <div className="bg-emerald-50/50 rounded-xl p-3 border border-emerald-100/50">
-                    <p className="text-xl font-bold text-emerald-700 leading-none">
-                      {statHadir}
-                    </p>
-                    <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600/70 mt-1.5">
-                      Hadir
-                    </p>
+                    <p className="text-xl font-bold text-emerald-700 leading-none">{statHadir}</p>
+                    <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-600/70 mt-1.5">Hadir</p>
                   </div>
                   <div className="bg-red-50/50 rounded-xl p-3 border border-red-100/50">
-                    <p className="text-xl font-bold text-red-600 leading-none">
-                      {statTelat}
-                    </p>
-                    <p className="text-[9px] font-bold uppercase tracking-wider text-red-500/70 mt-1.5">
-                      Telat
-                    </p>
+                    <p className="text-xl font-bold text-red-600 leading-none">{statTelat}</p>
+                    <p className="text-[9px] font-bold uppercase tracking-wider text-red-500/70 mt-1.5">Telat</p>
                   </div>
                   <div className="bg-amber-50/50 rounded-xl p-3 border border-amber-100/50">
-                    <p className="text-xl font-bold text-amber-600 leading-none">
-                      {statIzin}
-                    </p>
-                    <p className="text-[9px] font-bold uppercase tracking-wider text-amber-500/70 mt-1.5">
-                      Izin
-                    </p>
+                    <p className="text-xl font-bold text-amber-600 leading-none">{statIzin}</p>
+                    <p className="text-[9px] font-bold uppercase tracking-wider text-amber-500/70 mt-1.5">Izin</p>
                   </div>
                 </div>
               </div>
@@ -1107,49 +1347,25 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
 
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 lg:col-span-2">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-3">
-                <h3 className="font-bold text-slate-800 flex items-center gap-2 text-lg">
-                  <BookOpen className="h-5 w-5 text-emerald-600" /> Agenda
-                  Mengajar ({hariIni})
-                </h3>
-                <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-3 py-1.5 rounded-full shadow-sm">
-                  {jdwlHariIni.length} Sesi Hari Ini
-                </span>
+                <h3 className="font-bold text-slate-800 flex items-center gap-2 text-lg"><BookOpen className="h-5 w-5 text-emerald-600" /> Agenda Mengajar ({hariIni})</h3>
+                <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-3 py-1.5 rounded-full shadow-sm">{jdwlHariIni.length} Sesi Hari Ini</span>
               </div>
               <div className="space-y-4">
                 {isLoading ? (
-                  <div className="text-center text-slate-500 py-8">
-                    <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2 text-emerald-500" />{" "}
-                    Memuat data...
-                  </div>
+                  <div className="text-center text-slate-500 py-8"><RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2 text-emerald-500" /> Memuat data...</div>
                 ) : jdwlHariIni.length === 0 ? (
-                  <div className="text-center text-slate-500 py-10 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
-                    <Calendar className="h-10 w-10 text-slate-300 mx-auto mb-3" />
-                    <p className="font-medium text-slate-600">
-                      Tidak ada jadwal mengajar untuk hari ini.
-                    </p>
-                  </div>
+                  <div className="text-center text-slate-500 py-10 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200"><Calendar className="h-10 w-10 text-slate-300 mx-auto mb-3" /><p className="font-medium text-slate-600">Tidak ada jadwal mengajar untuk hari ini.</p></div>
                 ) : (
                   jdwlHariIni.map((item) => (
-                    <div
-                      key={item.id}
-                      className="relative bg-white rounded-2xl p-5 shadow-sm border border-slate-100 overflow-hidden"
-                    >
+                    <div key={item.id} className="relative bg-white rounded-2xl p-5 shadow-sm border border-slate-100 overflow-hidden">
                       <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-500"></div>
                       <div className="pl-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                         <div>
-                          <div className="inline-flex bg-slate-50 text-slate-600 font-mono text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-200 items-center gap-1.5 mb-2">
-                            <Clock4 className="h-3.5 w-3.5" /> {item.jam}
-                          </div>
-                          <p className="font-bold text-slate-900 text-lg mb-2">
-                            {item.mapel}
-                          </p>
+                          <div className="inline-flex bg-slate-50 text-slate-600 font-mono text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-200 items-center gap-1.5 mb-2"><Clock4 className="h-3.5 w-3.5" /> {item.jam}</div>
+                          <p className="font-bold text-slate-900 text-lg mb-2">{item.mapel}</p>
                           <div className="flex items-center gap-2">
-                            <div className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 px-3 py-1 rounded-md text-[10px] uppercase font-bold border border-indigo-100">
-                              <Users className="h-3 w-3" /> {item.kelas}
-                            </div>
-                            <div className="flex items-center gap-1.5 bg-amber-50 text-amber-700 px-3 py-1 rounded-md text-[10px] uppercase font-bold border border-amber-100">
-                              <MapPin className="h-3 w-3" /> {item.ruang}
-                            </div>
+                            <div className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 px-3 py-1 rounded-md text-[10px] uppercase font-bold border border-indigo-100"><Users className="h-3 w-3" /> {item.kelas}</div>
+                            <div className="flex items-center gap-1.5 bg-amber-50 text-amber-700 px-3 py-1 rounded-md text-[10px] uppercase font-bold border border-amber-100"><MapPin className="h-3 w-3" /> {item.ruang}</div>
                           </div>
                         </div>
                       </div>
@@ -1163,70 +1379,31 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
       )}
 
       {activeMenu === "absen" && <AbsenScreen user={user} />}
+      {activeMenu === "acara_guru" && <PresensiAcara user={user} />}
 
       {activeMenu === "riwayat" && (
         <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden animate-in fade-in duration-500">
           <div className="p-6 md:p-8 border-b border-slate-100 bg-slate-50/50 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="bg-emerald-100 p-3 rounded-2xl">
-                <FileText className="h-8 w-8 text-emerald-600" />
-              </div>
+              <div className="bg-emerald-100 p-3 rounded-2xl"><FileText className="h-8 w-8 text-emerald-600" /></div>
               <div>
-                <h2 className="text-2xl font-bold text-slate-800 font-serif">
-                  Riwayat Kehadiran
-                </h2>
-                <p className="text-slate-500 text-sm mt-1">
-                  Jejak rekam presensi komprehensif Anda.
-                </p>
+                <h2 className="text-2xl font-bold text-slate-800 font-serif">Riwayat Kehadiran</h2>
+                <p className="text-slate-500 text-sm mt-1">Jejak rekam presensi komprehensif Anda.</p>
               </div>
             </div>
-
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto">
               <div className="bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm flex items-center hover:border-emerald-300 w-full sm:w-auto">
-                <div className="px-3 text-emerald-600">
-                  <Filter className="h-5 w-5" />
-                </div>
-                <input
-                  type="month"
-                  value={riwayatBulan}
-                  onChange={(e) => setRiwayatBulan(e.target.value)}
-                  className="bg-transparent border-none text-sm font-bold text-slate-700 focus:ring-0 outline-none pr-3 w-full cursor-pointer"
-                />
+                <div className="px-3 text-emerald-600"><Filter className="h-5 w-5" /></div>
+                <input type="month" value={riwayatBulan} onChange={(e) => setRiwayatBulan(e.target.value)} className="bg-transparent border-none text-sm font-bold text-slate-700 focus:ring-0 outline-none pr-3 w-full cursor-pointer" />
               </div>
-              <button
-                onClick={handleDownloadPDF}
-                className="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white px-5 py-3 rounded-xl font-bold text-sm shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all"
-              >
-                <Printer className="h-4 w-4" /> Cetak Laporan PDF
-              </button>
+              <button onClick={handleDownloadPDF} className="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white px-5 py-3 rounded-xl font-bold text-sm shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all"><Printer className="h-4 w-4" /> Cetak Laporan PDF</button>
             </div>
           </div>
 
           <div className="p-6 grid grid-cols-3 gap-3 md:gap-6 bg-white border-b border-slate-100">
-            <div className="bg-emerald-50/50 rounded-2xl p-4 border border-emerald-100/50 text-center">
-              <p className="text-2xl md:text-3xl font-bold text-emerald-700">
-                {statHadir}
-              </p>
-              <p className="text-[10px] font-bold uppercase text-emerald-600/70 mt-1">
-                Hadir Tepat
-              </p>
-            </div>
-            <div className="bg-red-50/50 rounded-2xl p-4 border border-red-100/50 text-center">
-              <p className="text-2xl md:text-3xl font-bold text-red-600">
-                {statTelat}
-              </p>
-              <p className="text-[10px] font-bold uppercase text-red-500/70 mt-1">
-                Terlambat
-              </p>
-            </div>
-            <div className="bg-amber-50/50 rounded-2xl p-4 border border-amber-100/50 text-center">
-              <p className="text-2xl md:text-3xl font-bold text-amber-600">
-                {statIzin}
-              </p>
-              <p className="text-[10px] font-bold uppercase text-amber-500/70 mt-1">
-                Izin / Sakit
-              </p>
-            </div>
+            <div className="bg-emerald-50/50 rounded-2xl p-4 border border-emerald-100/50 text-center"><p className="text-2xl md:text-3xl font-bold text-emerald-700">{statHadir}</p><p className="text-[10px] font-bold uppercase text-emerald-600/70 mt-1">Hadir Tepat</p></div>
+            <div className="bg-red-50/50 rounded-2xl p-4 border border-red-100/50 text-center"><p className="text-2xl md:text-3xl font-bold text-red-600">{statTelat}</p><p className="text-[10px] font-bold uppercase text-red-500/70 mt-1">Terlambat</p></div>
+            <div className="bg-amber-50/50 rounded-2xl p-4 border border-amber-100/50 text-center"><p className="text-2xl md:text-3xl font-bold text-amber-600">{statIzin}</p><p className="text-[10px] font-bold uppercase text-amber-500/70 mt-1">Izin / Sakit</p></div>
           </div>
 
           <div className="p-6 overflow-x-auto">
@@ -1242,84 +1419,25 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
                 {isLoading ? (
-                  <tr>
-                    <td
-                      colSpan="5"
-                      className="px-6 py-12 text-center text-slate-500"
-                    >
-                      <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-3 text-emerald-500" />{" "}
-                      Memuat riwayat...
-                    </td>
-                  </tr>
+                  <tr><td colSpan="5" className="px-6 py-12 text-center text-slate-500"><RefreshCw className="h-8 w-8 animate-spin mx-auto mb-3 text-emerald-500" /> Memuat riwayat...</td></tr>
                 ) : paginatedRiwayat.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan="5"
-                      className="px-6 py-12 text-center text-slate-500 bg-slate-50/50"
-                    >
-                      <FileText className="h-10 w-10 text-slate-300 mx-auto mb-3" />
-                      <p>Belum ada jejak kehadiran pada bulan ini.</p>
-                    </td>
-                  </tr>
+                  <tr><td colSpan="5" className="px-6 py-12 text-center text-slate-500 bg-slate-50/50"><FileText className="h-10 w-10 text-slate-300 mx-auto mb-3" /><p>Belum ada jejak kehadiran pada bulan ini.</p></td></tr>
                 ) : (
                   paginatedRiwayat.map((item) => (
-                    <tr
-                      key={item.id}
-                      className="hover:bg-slate-50/80 transition-colors"
-                    >
-                      <td className="px-6 py-4 font-bold text-slate-700 whitespace-nowrap">
-                        {item.tanggal}
-                      </td>
+                    <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="px-6 py-4 font-bold text-slate-700 whitespace-nowrap">{item.tanggal}</td>
                       <td className="px-6 py-4">
-                        <span
-                          className={`inline-block px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider mb-1 ${
-                            item.jenis_absen === "Hadir"
-                              ? "bg-emerald-100 text-emerald-700"
-                              : "bg-amber-100 text-amber-700"
-                          }`}
-                        >
-                          {item.jenis_absen || "Hadir"}
-                        </span>
-                        {item.jenis_absen !== "Hadir" && (
-                          <p
-                            className="text-[11px] text-slate-500 italic max-w-[200px] truncate"
-                            title={item.keterangan}
-                          >
-                            "{item.keterangan}"
-                          </p>
-                        )}
+                        <span className={`inline-block px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider mb-1 ${item.jenis_absen?.includes("Hadir") ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{item.jenis_absen || "Hadir"}</span>
+                        {!item.jenis_absen?.includes("Hadir") && <p className="text-[11px] text-slate-500 italic max-w-[200px] truncate" title={item.keterangan}>"{item.keterangan}"</p>}
                       </td>
-                      <td className="px-6 py-4 font-mono font-bold text-slate-600">
-                        {item.jenis_absen === "Hadir"
-                          ? item.waktu_absen || "-"
-                          : "-"}
-                      </td>
-                      <td className="px-6 py-4 font-mono font-bold text-slate-600">
-                        {item.waktu_pulang || "-"}
-                      </td>
+                      {/* FIX PENAMPILAN JAM MASUK */}
+                      <td className="px-6 py-4 font-mono font-bold text-slate-600">{item.jenis_absen?.includes("Hadir") ? item.waktu_absen || "-" : "-"}</td>
+                      <td className="px-6 py-4 font-mono font-bold text-slate-600">{item.waktu_pulang || "-"}</td>
                       <td className="px-6 py-4 text-center">
-                        {item.jenis_absen === "Hadir" ? (
-                          <span
-                            className={`inline-flex px-3 py-1 rounded-full text-[10px] font-bold uppercase ${
-                              item.status === "Tepat Waktu"
-                                ? "bg-emerald-50 border border-emerald-200 text-emerald-600"
-                                : "bg-red-50 border border-red-200 text-red-600"
-                            }`}
-                          >
-                            {item.status}
-                          </span>
+                        {item.jenis_absen?.includes("Hadir") ? (
+                          <span className={`inline-flex px-3 py-1 rounded-full text-[10px] font-bold uppercase ${item.status === "Tepat Waktu" ? "bg-emerald-50 border border-emerald-200 text-emerald-600" : "bg-red-50 border border-red-200 text-red-600"}`}>{item.status}</span>
                         ) : (
-                          <span
-                            className={`inline-flex px-3 py-1 rounded-full text-[10px] font-bold uppercase ${
-                              item.status === "Diizinkan"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : item.status === "Ditolak"
-                                ? "bg-red-100 text-red-700"
-                                : "bg-amber-100 text-amber-700"
-                            }`}
-                          >
-                            {item.status}
-                          </span>
+                          <span className={`inline-flex px-3 py-1 rounded-full text-[10px] font-bold uppercase ${item.status === "Diizinkan" ? "bg-emerald-100 text-emerald-700" : item.status === "Ditolak" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{item.status}</span>
                         )}
                       </td>
                     </tr>
@@ -1331,113 +1449,17 @@ const PegawaiDashboard = ({ user, activeMenu, setActiveMenu }) => {
 
           {totalPages > 1 && (
             <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
-              <p className="text-xs font-bold text-slate-500">
-                Hal {currentPage} dari {totalPages}
-              </p>
+              <p className="text-xs font-bold text-slate-500">Hal {currentPage} dari {totalPages}</p>
               <div className="flex gap-2">
-                <button
-                  onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
-                  disabled={currentPage === 1}
-                  className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50 transition-colors"
-                >
-                  <ChevronLeft className="h-4 w-4 text-slate-600" />
-                </button>
-                <button
-                  onClick={() =>
-                    setCurrentPage((prev) => Math.min(prev + 1, totalPages))
-                  }
-                  disabled={currentPage === totalPages}
-                  className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50 transition-colors"
-                >
-                  <ChevronRight className="h-4 w-4 text-slate-600" />
-                </button>
+                <button onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))} disabled={currentPage === 1} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50 transition-colors"><ChevronLeft className="h-4 w-4 text-slate-600" /></button>
+                <button onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))} disabled={currentPage === totalPages} className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-100 disabled:opacity-50 transition-colors"><ChevronRight className="h-4 w-4 text-slate-600" /></button>
               </div>
             </div>
           )}
         </div>
       )}
 
-      {activeMenu === "jadwal" && (
-        <div className="bg-white p-6 md:p-10 rounded-3xl shadow-sm border border-slate-200 animate-in fade-in duration-500">
-          <div className="flex items-center gap-4 mb-8 border-b border-slate-100 pb-6">
-            <div className="bg-emerald-100 p-3 rounded-2xl">
-              <Calendar className="h-8 w-8 text-emerald-600" />
-            </div>
-            <div>
-              <h2 className="text-2xl font-bold text-slate-800 font-serif">
-                Jadwal Mengajar Mingguan
-              </h2>
-            </div>
-          </div>
-          {isLoading ? (
-            <div className="py-12 text-center text-slate-500">
-              <RefreshCw className="h-8 w-8 animate-spin text-emerald-500 mx-auto mb-4" />
-              <p>Memuat jadwal...</p>
-            </div>
-          ) : jadwalList.length === 0 ? (
-            <div className="py-12 text-center text-slate-500 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
-              <p className="font-medium text-slate-600">
-                Belum ada jadwal akademik ditugaskan.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-              {["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"].map(
-                (hari) => {
-                  const jadwalHari = jadwalList.filter((j) => j.hari === hari);
-                  if (jadwalHari.length === 0) return null;
-                  return (
-                    <div
-                      key={hari}
-                      className="bg-slate-50/70 rounded-3xl p-6 border border-slate-200 shadow-sm"
-                    >
-                      <div className="flex items-center gap-3 mb-6">
-                        <div className="bg-emerald-600 text-white p-2 rounded-xl shadow-md">
-                          <Calendar className="h-5 w-5" />
-                        </div>
-                        <h3 className="font-bold text-xl text-slate-800 font-serif tracking-wide">
-                          {hari}
-                        </h3>
-                      </div>
-                      <div className="space-y-4">
-                        {jadwalHari.map((item) => (
-                          <div
-                            key={item.id}
-                            className="relative bg-white rounded-2xl p-5 shadow-sm border border-slate-100 overflow-hidden"
-                          >
-                            <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b from-emerald-400 to-teal-600"></div>
-                            <div className="pl-2">
-                              <div className="flex justify-between items-start mb-3">
-                                <span className="bg-slate-50 text-slate-600 font-mono text-sm font-bold px-3 py-1.5 rounded-lg border border-slate-200">
-                                  <Clock4 className="h-4 w-4 inline mr-1 text-emerald-600" />{" "}
-                                  {item.jam}
-                                </span>
-                              </div>
-                              <p className="font-bold text-slate-900 text-lg mt-3 mb-4 leading-tight">
-                                {item.mapel}
-                              </p>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <div className="bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-lg text-[11px] uppercase font-bold border border-indigo-100">
-                                  <Users className="h-3.5 w-3.5 inline mr-1" />{" "}
-                                  {item.kelas}
-                                </div>
-                                <div className="bg-amber-50 text-amber-700 px-3 py-1.5 rounded-lg text-[11px] uppercase font-bold border border-amber-100">
-                                  <MapPin className="h-3.5 w-3.5 inline mr-1" />{" "}
-                                  {item.ruang}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                }
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      {activeMenu === "jadwal" && <JadwalScreen user={user} />}
     </div>
   );
 };
@@ -1591,7 +1613,14 @@ const KelolaPerizinan = () => {
 
   const fetchIzin = async () => {
     setIsLoading(true);
-    const { data } = await supabase.from("absensi").select("*").neq("jenis_absen", "Hadir").order("id", { ascending: false });
+    
+    // MENGGUNAKAN FILTER .in() UNTUK PROTEKSI ABSOLUT & KECEPATAN MAKSIMAL
+    const { data } = await supabase
+      .from("absensi")
+      .select("*")
+      .in("jenis_absen", ["Sakit", "Izin", "Dinas Luar"]) 
+      .order("id", { ascending: false });
+      
     setIzinList(data || []);
     setIsLoading(false);
   };
@@ -2257,75 +2286,70 @@ const KelolaJadwal = () => {
   );
 };
 
+// ============================================================================
+// --- KOMPONEN ADMIN: REKAP ABSENSI KESELURUHAN ---
+// ============================================================================
 const RekapAbsensi = () => {
-  const [guruList, setGuruList] = useState([]); 
-  const [absensiList, setAbsensiList] = useState([]); 
-  const [isLoading, setIsLoading] = useState(true); 
-  const today = new Date(); 
-  const currentMonthValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`; 
-  const [selectedBulan, setSelectedBulan] = useState(currentMonthValue); 
+  const [guruList, setGuruList] = useState([]);
+  const [absensiList, setAbsensiList] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const today = new Date();
+  const currentMonthValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  const [selectedBulan, setSelectedBulan] = useState(currentMonthValue);
   const [selectedGuru, setSelectedGuru] = useState(null);
 
-  useEffect(() => { 
-    const fetchData = async () => { 
-      setIsLoading(true); 
-      try { 
-        const { data: dbGuru } = await supabase.from("pegawai").select("username, name").eq("role", "Guru"); 
-        setGuruList(dbGuru || []); 
-        const { data: dbAbsen } = await supabase.from("absensi").select("*"); 
-        setAbsensiList(dbAbsen || []); 
-      } catch (err) {} 
-      setIsLoading(false); 
-    }; 
-    fetchData(); 
+  useEffect(() => {
+    const fetchData = async () => {
+      setIsLoading(true);
+      try {
+        const { data: dbGuru } = await supabase.from("pegawai").select("username, name").eq("role", "Guru");
+        setGuruList(dbGuru || []);
+        const { data: dbAbsen } = await supabase.from("absensi").select("*");
+        setAbsensiList(dbAbsen || []);
+      } catch (err) {}
+      setIsLoading(false);
+    };
+    fetchData();
   }, []);
 
-  const filterAbsenByBulan = (absenData, filterBulan) => { 
-    return absenData.filter((a) => { 
-      const parts = a.tanggal ? a.tanggal.split("/") : []; 
-      if (parts.length === 3) return `${parts[2]}-${parts[1]}` === filterBulan; 
-      return false; 
-    }); 
-  };
-  
-  const absenBulanIni = filterAbsenByBulan(absensiList, selectedBulan);
-  
-  const hitungStatistikGuru = (nip) => { 
-    const absenGuru = absenBulanIni.filter((a) => a.nip_guru === nip); 
-    const hadir = absenGuru.filter((a) => a.jenis_absen === "Hadir").length; 
-    const telat = absenGuru.filter((a) => a.status === "Terlambat").length; 
-    const izinSakit = absenGuru.filter((a) => ["Izin", "Sakit", "Dinas Luar"].includes(a.jenis_absen)).length; 
-    return { hadir, telat, izinSakit, records: absenGuru }; 
-  };
-  
-  const downloadCSV = (guruData, records) => { 
-    if (records.length === 0) { alert("Tidak ada data absen di bulan ini untuk diunduh."); return; } 
-    const headers = ["Tanggal", "Jenis Absen", "Jam Masuk", "Jam Pulang", "Status", "Jarak/Keterangan"]; 
-    const rows = records.map((r) => [
-      r.tanggal, r.jenis_absen || "Hadir", r.waktu_absen || "-", r.waktu_pulang || "-", r.status, `"${r.keterangan || r.jarak || ""}"`
-    ]); 
-    const csvContent = [headers.join(","), ...rows.map((e) => e.join(","))].join("\n"); 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" }); 
-    const url = URL.createObjectURL(blob); 
-    const link = document.createElement("a"); 
-    link.setAttribute("href", url); 
-    link.setAttribute("download", `Rekap_Absen_${guruData.name.replace(/\s+/g, "_")}_${selectedBulan}.csv`); 
-    document.body.appendChild(link); 
-    link.click(); 
-    document.body.removeChild(link); 
+  const filterAbsenByBulan = (absenData, filterBulan) => {
+    return absenData.filter((a) => {
+      const parts = a.tanggal ? a.tanggal.split("/") : [];
+      if (parts.length === 3) return `${parts[2]}-${parts[1]}` === filterBulan;
+      return false;
+    });
   };
 
-  // --- FUNGSI DOWNLOAD PDF BARU (NATIVE & FAST, CSS PRINT FIXED) ---
+  const absenBulanIni = filterAbsenByBulan(absensiList, selectedBulan);
+
+  // FIX LOGIKA STATISTIK
+  const hitungStatistikGuru = (nip) => {
+    const absenGuru = absenBulanIni.filter((a) => a.nip_guru === nip);
+    const hadir = absenGuru.filter((a) => a.jenis_absen?.includes("Hadir")).length;
+    const telat = absenGuru.filter((a) => a.status === "Terlambat").length;
+    const izinSakit = absenGuru.filter((a) => ["Izin", "Sakit", "Dinas Luar"].includes(a.jenis_absen)).length;
+    return { hadir, telat, izinSakit, records: absenGuru };
+  };
+
+  const downloadCSV = (guruData, records) => {
+    if (records.length === 0) { alert("Tidak ada data absen di bulan ini untuk diunduh."); return; }
+    const headers = ["Tanggal", "Jenis Absen", "Jam Masuk", "Jam Pulang", "Status", "Jarak/Keterangan"];
+    const rows = records.map((r) => [r.tanggal, r.jenis_absen || "Hadir", r.waktu_absen || "-", r.waktu_pulang || "-", r.status, `"${r.keterangan || r.jarak || ""}"`]);
+    const csvContent = [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Rekap_Absen_${guruData.name.replace(/\s+/g, "_")}_${selectedBulan}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const downloadPDF = (guruData, records) => {
-    if (records.length === 0) { 
-      alert("Tidak ada data absen di bulan ini untuk dicetak."); 
-      return; 
-    }
+    if (records.length === 0) { alert("Tidak ada data absen di bulan ini untuk dicetak."); return; }
     const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      alert("Pop-up diblokir oleh browser! Mohon izinkan pop-up (Allow Pop-ups) untuk mendownload PDF.");
-      return;
-    }
+    if (!printWindow) { alert("Pop-up diblokir oleh browser! Mohon izinkan pop-up."); return; }
 
     printWindow.document.write(`
       <!DOCTYPE html>
@@ -2354,19 +2378,10 @@ const RekapAbsensi = () => {
           </style>
         </head>
         <body>
-          <div class="header">
-            <h1>SDIT Izzatul Islam</h1>
-            <p>Laporan Resmi Rekam Jejak Presensi Pegawai</p>
-          </div>
+          <div class="header"><h1>SDIT Izzatul Islam</h1><p>Laporan Resmi Rekam Jejak Presensi Pegawai</p></div>
           <div class="info-grid">
-            <div class="info-box">
-              <p><strong>Nama Pegawai:</strong> ${guruData.name}</p>
-              <p><strong>NIP / Username:</strong> ${guruData.username}</p>
-            </div>
-            <div class="info-box" style="text-align: right;">
-              <p><strong>Periode Laporan:</strong> ${selectedBulan}</p>
-              <p><strong>Dicetak Pada:</strong> ${getTodayDateString()} ${getCurrentTimeString()}</p>
-            </div>
+            <div class="info-box"><p><strong>Nama Pegawai:</strong> ${guruData.name}</p><p><strong>NIP / Username:</strong> ${guruData.username}</p></div>
+            <div class="info-box" style="text-align: right;"><p><strong>Periode Laporan:</strong> ${selectedBulan}</p><p><strong>Dicetak Pada:</strong> ${getTodayDateString()} ${getCurrentTimeString()}</p></div>
           </div>
           <div class="stats-container">
             <div class="stat-card" style="border-top: 4px solid #10b981;"><h3>${guruData.stats.hadir}</h3><p>Total Hadir</p></div>
@@ -2375,26 +2390,15 @@ const RekapAbsensi = () => {
           </div>
           <table>
             <thead>
-              <tr>
-                <th>Tanggal</th>
-                <th>Jenis Absen</th>
-                <th>Keterangan Tambahan</th>
-                <th>Jam Masuk</th>
-                <th>Jam Pulang</th>
-                <th>Status Sistem</th>
-              </tr>
+              <tr><th>Tanggal</th><th>Jenis Absen</th><th>Keterangan Tambahan</th><th>Jam Masuk</th><th>Jam Pulang</th><th>Status Sistem</th></tr>
             </thead>
             <tbody>
-              ${records.sort((a, b) => { 
-                const dA = a.tanggal.split("/").reverse().join(""); 
-                const dB = b.tanggal.split("/").reverse().join(""); 
-                return dB.localeCompare(dA); 
-              }).map((r) => `
+              ${records.sort((a, b) => b.tanggal.split("/").reverse().join("").localeCompare(a.tanggal.split("/").reverse().join(""))).map((r) => `
                 <tr>
                   <td><strong>${r.tanggal}</strong></td>
                   <td>${r.jenis_absen || "Hadir"}</td>
-                  <td>${r.jenis_absen !== "Hadir" ? r.keterangan || "-" : "-"}</td>
-                  <td style="font-family: monospace;">${r.jenis_absen === "Hadir" ? r.waktu_absen || "-" : "-"}</td>
+                  <td>${!r.jenis_absen?.includes("Hadir") ? r.keterangan || "-" : "-"}</td>
+                  <td style="font-family: monospace;">${r.jenis_absen?.includes("Hadir") ? r.waktu_absen || "-" : "-"}</td>
                   <td style="font-family: monospace;">${r.waktu_pulang || "-"}</td>
                   <td>${r.status}</td>
                 </tr>
@@ -2405,13 +2409,7 @@ const RekapAbsensi = () => {
             <p>Dokumen ini dihasilkan secara otomatis oleh Sistem Portal Presensi SDIT Izzatul Islam.</p>
             <p>Pencetakan tidak memerlukan tanda tangan basah karena telah tervalidasi oleh Database Satelit.</p>
           </div>
-          <script>
-            window.onload = function() { 
-              setTimeout(function() {
-                window.print();
-              }, 500); 
-            };
-          </script>
+          <script>window.onload = function() { setTimeout(function() { window.print(); }, 500); };</script>
         </body>
       </html>
     `);
@@ -2444,33 +2442,17 @@ const RekapAbsensi = () => {
               <div key={guru.username} className="bg-white rounded-3xl border border-slate-200 shadow-sm hover:shadow-xl hover:border-emerald-300 hover:-translate-y-1 transition-all duration-300 overflow-hidden flex flex-col group">
                 <div className="p-6 border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl -translate-y-1/2 translate-x-1/4 group-hover:bg-emerald-500/20 transition-colors"></div>
-                  <div className="h-12 w-12 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-2xl flex items-center justify-center mb-4 text-emerald-700 font-bold text-xl border border-emerald-200 shadow-inner group-hover:scale-110 transition-transform duration-300">
-                    {guru.name.charAt(0)}
-                  </div>
+                  <div className="h-12 w-12 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-2xl flex items-center justify-center mb-4 text-emerald-700 font-bold text-xl border border-emerald-200 shadow-inner group-hover:scale-110 transition-transform duration-300">{guru.name.charAt(0)}</div>
                   <h3 className="font-bold text-slate-800 text-lg truncate leading-tight" title={guru.name}>{guru.name}</h3>
                   <p className="text-[11px] font-mono text-slate-500 mt-1.5 flex items-center gap-1.5"><User className="h-3 w-3" /> NIP: {guru.username}</p>
                 </div>
                 <div className="p-6 flex-1 bg-white flex flex-col justify-between">
                   <div className="grid grid-cols-3 gap-3 text-center mb-6">
-                    <div className="bg-emerald-50/50 rounded-2xl p-3 border border-emerald-100/50 group-hover:bg-emerald-50 transition-colors">
-                      <p className="text-2xl font-bold text-emerald-700 leading-none">{stats.hadir}</p>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600/70 mt-2">Hadir</p>
-                    </div>
-                    <div className="bg-red-50/50 rounded-2xl p-3 border border-red-100/50 group-hover:bg-red-50 transition-colors">
-                      <p className="text-2xl font-bold text-red-600 leading-none">{stats.telat}</p>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-red-500/70 mt-2">Telat</p>
-                    </div>
-                    <div className="bg-amber-50/50 rounded-2xl p-3 border border-amber-100/50 group-hover:bg-amber-50 transition-colors">
-                      <p className="text-2xl font-bold text-amber-600 leading-none">{stats.izinSakit}</p>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-amber-500/70 mt-2">Izin</p>
-                    </div>
+                    <div className="bg-emerald-50/50 rounded-2xl p-3 border border-emerald-100/50 group-hover:bg-emerald-50 transition-colors"><p className="text-2xl font-bold text-emerald-700 leading-none">{stats.hadir}</p><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600/70 mt-2">Hadir</p></div>
+                    <div className="bg-red-50/50 rounded-2xl p-3 border border-red-100/50 group-hover:bg-red-50 transition-colors"><p className="text-2xl font-bold text-red-600 leading-none">{stats.telat}</p><p className="text-[10px] font-bold uppercase tracking-wider text-red-500/70 mt-2">Telat</p></div>
+                    <div className="bg-amber-50/50 rounded-2xl p-3 border border-amber-100/50 group-hover:bg-amber-50 transition-colors"><p className="text-2xl font-bold text-amber-600 leading-none">{stats.izinSakit}</p><p className="text-[10px] font-bold uppercase tracking-wider text-amber-500/70 mt-2">Izin</p></div>
                   </div>
-                  <button 
-                    onClick={() => setSelectedGuru({ ...guru, stats })} 
-                    className="w-full py-3.5 bg-slate-50 hover:bg-emerald-600 text-slate-600 hover:text-white font-bold text-sm rounded-xl transition-all duration-300 border border-slate-200 hover:border-transparent flex items-center justify-center gap-2 shadow-sm hover:shadow-md"
-                  >
-                    <LayoutDashboard className="h-4 w-4" /> Lihat Detail
-                  </button>
+                  <button onClick={() => setSelectedGuru({ ...guru, stats })} className="w-full py-3.5 bg-slate-50 hover:bg-emerald-600 text-slate-600 hover:text-white font-bold text-sm rounded-xl transition-all duration-300 border border-slate-200 hover:border-transparent flex items-center justify-center gap-2 shadow-sm hover:shadow-md"><LayoutDashboard className="h-4 w-4" /> Lihat Detail</button>
                 </div>
               </div>
             );
@@ -2482,93 +2464,41 @@ const RekapAbsensi = () => {
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6">
           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedGuru(null)}></div>
           <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-5xl relative z-10 overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200 border border-slate-100">
-            
             <div className="p-6 md:p-8 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
               <div className="flex items-center gap-4">
-                <div className="h-14 w-14 bg-emerald-100 rounded-2xl flex items-center justify-center text-emerald-700 font-bold text-2xl border border-emerald-200 shadow-inner">
-                  {selectedGuru.name.charAt(0)}
-                </div>
-                <div>
-                  <h3 className="font-bold text-2xl text-slate-800 font-serif mb-1">{selectedGuru.name}</h3>
-                  <p className="text-sm text-slate-500 flex items-center gap-2 font-medium">
-                    <Calendar className="h-4 w-4 text-emerald-500" /> Periode Laporan: 
-                    <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">{selectedBulan}</span>
-                  </p>
-                </div>
+                <div className="h-14 w-14 bg-emerald-100 rounded-2xl flex items-center justify-center text-emerald-700 font-bold text-2xl border border-emerald-200 shadow-inner">{selectedGuru.name.charAt(0)}</div>
+                <div><h3 className="font-bold text-2xl text-slate-800 font-serif mb-1">{selectedGuru.name}</h3><p className="text-sm text-slate-500 flex items-center gap-2 font-medium"><Calendar className="h-4 w-4 text-emerald-500" /> Periode Laporan: <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">{selectedBulan}</span></p></div>
               </div>
-              
               <div className="flex items-center gap-2 w-full sm:w-auto">
-                <button 
-                  onClick={() => downloadCSV(selectedGuru, selectedGuru.stats.records)} 
-                  className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-xl font-bold text-sm shadow-md flex items-center justify-center gap-2 transition-all active:scale-95"
-                >
-                  <Download className="h-4 w-4" /> CSV
-                </button>
-                <button 
-                  onClick={() => downloadPDF(selectedGuru, selectedGuru.stats.records)} 
-                  className="flex-1 sm:flex-none bg-slate-800 hover:bg-slate-900 text-white px-4 py-3 rounded-xl font-bold text-sm shadow-md flex items-center justify-center gap-2 transition-all active:scale-95"
-                >
-                  <Printer className="h-4 w-4" /> PDF
-                </button>
-                <button 
-                  onClick={() => setSelectedGuru(null)} 
-                  className="p-3 bg-white border border-slate-200 text-slate-500 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
+                <button onClick={() => downloadCSV(selectedGuru, selectedGuru.stats.records)} className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-xl font-bold text-sm shadow-md flex items-center justify-center gap-2 transition-all active:scale-95"><Download className="h-4 w-4" /> CSV</button>
+                <button onClick={() => downloadPDF(selectedGuru, selectedGuru.stats.records)} className="flex-1 sm:flex-none bg-slate-800 hover:bg-slate-900 text-white px-4 py-3 rounded-xl font-bold text-sm shadow-md flex items-center justify-center gap-2 transition-all active:scale-95"><Printer className="h-4 w-4" /> PDF</button>
+                <button onClick={() => setSelectedGuru(null)} className="p-3 bg-white border border-slate-200 text-slate-500 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><X className="h-5 w-5" /></button>
               </div>
             </div>
             
             <div className="overflow-y-auto flex-1 p-6 md:p-8 bg-white scrollbar-thin scrollbar-thumb-slate-200">
               {selectedGuru.stats.records.length === 0 ? (
-                <div className="py-16 text-center bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl">
-                  <FileText className="h-12 w-12 text-slate-300 mx-auto mb-4" />
-                  <p className="text-slate-600 font-bold text-lg">Belum Ada Rekam Jejak</p>
-                </div>
+                <div className="py-16 text-center bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl"><FileText className="h-12 w-12 text-slate-300 mx-auto mb-4" /><p className="text-slate-600 font-bold text-lg">Belum Ada Rekam Jejak</p></div>
               ) : (
                 <div className="rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
                   <table className="w-full text-left text-sm border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider border-b border-slate-200">
-                        <th className="p-5 font-bold">Tanggal</th>
-                        <th className="p-5 font-bold">Jenis / Keterangan</th>
-                        <th className="p-5 font-bold">Jam Masuk</th>
-                        <th className="p-5 font-bold">Jam Pulang</th>
-                        <th className="p-5 font-bold text-right">Status Sistem</th>
-                      </tr>
-                    </thead>
+                    <thead><tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider border-b border-slate-200"><th className="p-5 font-bold">Tanggal</th><th className="p-5 font-bold">Jenis / Keterangan</th><th className="p-5 font-bold">Jam Masuk</th><th className="p-5 font-bold">Jam Pulang</th><th className="p-5 font-bold text-right">Status Sistem</th></tr></thead>
                     <tbody className="divide-y divide-slate-100">
-                      {selectedGuru.stats.records.sort((a, b) => { 
-                        const dA = a.tanggal.split("/").reverse().join(""); 
-                        const dB = b.tanggal.split("/").reverse().join(""); 
-                        return dB.localeCompare(dA); 
-                      }).map((absen, idx) => (
+                      {selectedGuru.stats.records.sort((a, b) => b.tanggal.split("/").reverse().join("").localeCompare(a.tanggal.split("/").reverse().join(""))).map((absen, idx) => (
                         <tr key={idx} className="hover:bg-slate-50/60 transition-colors">
                           <td className="p-5 font-bold text-slate-700 whitespace-nowrap">{absen.tanggal}</td>
                           <td className="p-5">
-                            <span className={`inline-block px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider mb-1.5 border ${absen.jenis_absen === "Hadir" ? "bg-emerald-50 border-emerald-100 text-emerald-700" : "bg-amber-50 border-amber-100 text-amber-700"}`}>
-                              {absen.jenis_absen || "Hadir"}
-                            </span>
-                            {absen.jenis_absen !== "Hadir" && (
-                              <p className="text-xs text-slate-500 leading-relaxed max-w-[250px] italic">"{absen.keterangan}"</p>
-                            )}
+                            <span className={`inline-block px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider mb-1.5 border ${absen.jenis_absen?.includes("Hadir") ? "bg-emerald-50 border-emerald-100 text-emerald-700" : "bg-amber-50 border-amber-100 text-amber-700"}`}>{absen.jenis_absen || "Hadir"}</span>
+                            {!absen.jenis_absen?.includes("Hadir") && (<p className="text-xs text-slate-500 leading-relaxed max-w-[250px] italic">"{absen.keterangan}"</p>)}
                           </td>
-                          <td className="p-5 font-mono font-bold text-slate-600">
-                            {absen.jenis_absen === "Hadir" ? absen.waktu_absen || "-" : "-"}
-                          </td>
-                          <td className="p-5 font-mono font-bold text-slate-600">
-                            {absen.waktu_pulang || "-"}
-                          </td>
+                          {/* FIX PENAMPILAN JAM MASUK DI MODAL ADMIN */}
+                          <td className="p-5 font-mono font-bold text-slate-600">{absen.jenis_absen?.includes("Hadir") ? absen.waktu_absen || "-" : "-"}</td>
+                          <td className="p-5 font-mono font-bold text-slate-600">{absen.waktu_pulang || "-"}</td>
                           <td className="p-5 text-right">
-                            {absen.jenis_absen === "Hadir" ? (
-                              <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${absen.status === "Tepat Waktu" ? "bg-emerald-50 border border-emerald-200 text-emerald-600" : "bg-red-50 border border-red-200 text-red-600"}`}>
-                                {absen.status === "Tepat Waktu" ? (<CheckCircle className="h-3 w-3" />) : (<AlertTriangle className="h-3 w-3" />)}
-                                {" "}{absen.status}
-                              </span>
+                            {absen.jenis_absen?.includes("Hadir") ? (
+                              <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${absen.status === "Tepat Waktu" ? "bg-emerald-50 border border-emerald-200 text-emerald-600" : "bg-red-50 border border-red-200 text-red-600"}`}><CheckCircle className="h-3 w-3" /> {absen.status}</span>
                             ) : (
-                              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-100 border border-slate-200 text-slate-500">
-                                <MoreHorizontal className="h-3 w-3" />{" "}Diizinkan
-                              </span>
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-100 border border-slate-200 text-slate-500"><MoreHorizontal className="h-3 w-3" /> Diizinkan</span>
                             )}
                           </td>
                         </tr>
@@ -2585,6 +2515,288 @@ const RekapAbsensi = () => {
   );
 };
 
+// ============================================================================
+// --- KOMPONEN ADMIN: KELOLA AGENDA ACARA KHUSUS ---
+// ============================================================================
+const KelolaAcara = () => {
+  const [acaraList, setAcaraList] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLocatingAdmin, setIsLocatingAdmin] = useState(false);
+  
+  // --- STATE BARU UNTUK EDIT & FILTER ---
+  const [modalMode, setModalMode] = useState("add"); 
+  const [editId, setEditId] = useState(null);
+  
+  const today = new Date();
+  const currentMonthValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
+  const [filterBulan, setFilterBulan] = useState(currentMonthValue);
+  
+  const [formData, setFormData] = useState({
+    tanggal: "", nama_acara: "", wajib_gps: false, lat: "", long: "", radius: 50
+  });
+
+  const fetchAcara = async () => {
+    setIsLoading(true);
+    const { data } = await supabase.from("agenda_acara").select("*").order("tanggal", { ascending: true });
+    setAcaraList(data || []);
+    setIsLoading(false);
+  };
+
+  useEffect(() => { fetchAcara(); }, []);
+
+  const handleOpenAddModal = () => {
+    setModalMode("add");
+    setEditId(null);
+    const todayDate = new Date();
+    const yyyy = todayDate.getFullYear();
+    const mm = String(todayDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(todayDate.getDate()).padStart(2, '0');
+    
+    setFormData({ tanggal: `${yyyy}-${mm}-${dd}`, nama_acara: "", wajib_gps: false, lat: "", long: "", radius: 50 });
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEditModal = (item) => {
+    setModalMode("edit");
+    setEditId(item.id);
+    
+    // Ubah DD/MM/YYYY dari database menjadi YYYY-MM-DD untuk input kalender HTML
+    const parts = item.tanggal.split("/");
+    const dateForInput = parts.length === 3 ? `${parts[2]}-${parts[1]}-${parts[0]}` : "";
+
+    setFormData({ 
+      tanggal: dateForInput, 
+      nama_acara: item.nama_acara, 
+      wajib_gps: item.wajib_gps, 
+      lat: item.lat || "", 
+      long: item.long || "", 
+      radius: item.radius || 50 
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleGetAdminLocation = () => {
+    setIsLocatingAdmin(true);
+    if (!navigator.geolocation) {
+      alert("Browser tidak mendukung GPS.");
+      setIsLocatingAdmin(false);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setFormData({ ...formData, lat: position.coords.latitude, long: position.coords.longitude });
+        setIsLocatingAdmin(false);
+      },
+      () => {
+        alert("Gagal membaca GPS. Pastikan izin lokasi perangkat Anda aktif.");
+        setIsLocatingAdmin(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsSaving(true);
+    
+    // Ubah format YYYY-MM-DD kembali menjadi DD/MM/YYYY
+    const tglParts = formData.tanggal.split("-");
+    const tglFormatted = `${tglParts[2]}/${tglParts[1]}/${tglParts[0]}`;
+
+    const payload = {
+      tanggal: tglFormatted,
+      nama_acara: formData.nama_acara,
+      wajib_gps: formData.wajib_gps,
+      lat: formData.wajib_gps && formData.lat ? parseFloat(formData.lat) : null,
+      long: formData.wajib_gps && formData.long ? parseFloat(formData.long) : null,
+      radius: formData.wajib_gps ? parseInt(formData.radius) : null,
+    };
+
+    let errorResult;
+    if (modalMode === "add") {
+      const { error } = await supabase.from("agenda_acara").insert([payload]);
+      errorResult = error;
+    } else {
+      const { error } = await supabase.from("agenda_acara").update(payload).eq("id", editId);
+      errorResult = error;
+    }
+    
+    setIsSaving(false);
+
+    if (errorResult) {
+      alert("Gagal menyimpan acara: " + errorResult.message);
+    } else {
+      setIsModalOpen(false);
+      fetchAcara();
+    }
+  };
+
+  const handleDelete = async (id, nama) => {
+    if (window.confirm(`Yakin ingin membatalkan dan menghapus acara "${nama}"?`)) {
+      await supabase.from("agenda_acara").delete().eq("id", id);
+      fetchAcara();
+    }
+  };
+
+  // --- LOGIKA FILTER BERDASARKAN BULAN & TAHUN ---
+  const filteredAcaraList = acaraList.filter((item) => {
+    if (!filterBulan) return true; 
+    const parts = item.tanggal ? item.tanggal.split("/") : []; 
+    if (parts.length === 3) {
+      return `${parts[2]}-${parts[1]}` === filterBulan; 
+    }
+    return false;
+  });
+
+  return (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-800 font-serif">Kalender Agenda Acara</h2>
+          <p className="text-sm text-slate-500 mt-1">Kelola dan jadwalkan kegiatan luar (Event) dengan mode absensi khusus.</p>
+        </div>
+        
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+          {/* FILTER BULAN */}
+          <div className="bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm flex items-center hover:border-emerald-300 w-full sm:w-auto transition-colors">
+            <div className="px-3 text-emerald-600"><Filter className="h-5 w-5" /></div>
+            <input
+              type="month"
+              value={filterBulan}
+              onChange={(e) => setFilterBulan(e.target.value)}
+              className="bg-transparent border-none text-sm font-bold text-slate-700 focus:ring-0 outline-none pr-3 w-full cursor-pointer"
+            />
+          </div>
+          <button onClick={handleOpenAddModal} className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md flex items-center justify-center gap-2 transition-all active:scale-95">
+            <Plus className="h-4 w-4" /> Tambah Acara
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <table className="w-full text-left text-sm border-collapse">
+          <thead>
+            <tr className="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-200">
+              <th className="p-4 font-bold">Tgl Pelaksanaan</th>
+              <th className="p-4 font-bold">Nama Kegiatan</th>
+              <th className="p-4 font-bold">Status Pelacakan (GPS)</th>
+              <th className="p-4 font-bold text-center">Aksi</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {isLoading ? (
+              <tr><td colSpan="4" className="p-10 text-center"><RefreshCw className="h-6 w-6 animate-spin mx-auto text-emerald-500 mb-2" /> Memuat kalender...</td></tr>
+            ) : filteredAcaraList.length === 0 ? (
+              <tr><td colSpan="4" className="p-10 text-center text-slate-500 bg-slate-50/50">Belum ada agenda acara khusus di bulan ini.</td></tr>
+            ) : (
+              filteredAcaraList.map((item) => (
+                <tr key={item.id} className="hover:bg-slate-50/50">
+                  <td className="p-4 font-bold text-slate-700">{item.tanggal}</td>
+                  <td className="p-4 font-bold text-emerald-700">{item.nama_acara}</td>
+                  <td className="p-4">
+                    {item.wajib_gps ? (
+                      <div>
+                        <span className="inline-flex px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-[10px] font-bold uppercase tracking-wider mb-1"><MapPin className="h-3 w-3 inline mr-1" /> GPS WAJIB</span>
+                        <p className="text-[10px] font-mono text-slate-500">Radius: {item.radius}m</p>
+                      </div>
+                    ) : (
+                      <span className="inline-flex px-2 py-1 bg-slate-100 text-slate-500 rounded text-[10px] font-bold uppercase tracking-wider">BEBAS LOKASI</span>
+                    )}
+                  </td>
+                  <td className="p-4">
+                    <div className="flex justify-center gap-2">
+                      <button onClick={() => handleOpenEditModal(item)} className="px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 border bg-white border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition-colors">
+                        <Edit2 className="h-3 w-3" /> Edit
+                      </button>
+                      <button onClick={() => handleDelete(item.id, item.nama_acara)} className="px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 border bg-white border-slate-200 text-slate-600 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors">
+                        <Trash2 className="h-3 w-3" /> Hapus
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {isModalOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => !isSaving && setIsModalOpen(false)}></div>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg relative z-10 animate-in zoom-in-95 duration-200 overflow-hidden">
+            <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-emerald-50/50">
+              <h3 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-emerald-600" /> {modalMode === "add" ? "Jadwalkan Acara Baru" : "Edit Acara"}
+              </h3>
+              <button onClick={() => setIsModalOpen(false)} className="p-1"><X className="h-5 w-5" /></button>
+            </div>
+            
+            <form onSubmit={handleSubmit} className="p-6 space-y-5">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Tanggal Acara</label>
+                  <input type="date" required value={formData.tanggal} onChange={(e) => setFormData({ ...formData, tanggal: e.target.value })} className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Nama Acara</label>
+                  <input type="text" required placeholder="Cth: Study Tour" value={formData.nama_acara} onChange={(e) => setFormData({ ...formData, nama_acara: e.target.value })} className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl">
+                <div className="flex justify-between items-center mb-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-800">Wajibkan Pelacakan GPS?</p>
+                    <p className="text-[10px] text-slate-500">Jika mati, absen bisa dari manapun.</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input type="checkbox" className="sr-only peer" checked={formData.wajib_gps} onChange={(e) => setFormData({ ...formData, wajib_gps: e.target.checked })} />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
+                  </label>
+                </div>
+
+                {formData.wajib_gps && (
+                  <div className="space-y-4 pt-4 border-t border-slate-200 animate-in slide-in-from-top-2">
+                    <button type="button" onClick={handleGetAdminLocation} disabled={isLocatingAdmin} className="w-full py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg text-xs font-bold border border-indigo-200 transition-colors flex items-center justify-center gap-2">
+                      <MapPin className="h-4 w-4" /> {isLocatingAdmin ? "Mencari Satelit..." : "Gunakan Titik Lokasi Saya Saat Ini"}
+                    </button>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Latitude</label>
+                        <input type="text" value={formData.lat} onChange={(e) => setFormData({ ...formData, lat: e.target.value })} required={formData.wajib_gps} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs outline-none" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Longitude</label>
+                        <input type="text" value={formData.long} onChange={(e) => setFormData({ ...formData, long: e.target.value })} required={formData.wajib_gps} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs outline-none" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Radius Boleh Absen (Meter)</label>
+                      <input type="number" min="10" value={formData.radius} onChange={(e) => setFormData({ ...formData, radius: e.target.value })} required={formData.wajib_gps} className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs outline-none" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button type="button" onClick={() => setIsModalOpen(false)} className="px-5 py-2.5 text-sm font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition-colors">Batal</button>
+                <button type="submit" disabled={isSaving} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all active:scale-95">
+                  {isSaving ? "Menyimpan..." : (modalMode === "add" ? "Jadwalkan Acara" : "Simpan Perubahan")}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// --- KOMPONEN ADMIN: PENGATURAN SISTEM ---
+// ============================================================================
 const PengaturanSistem = () => {
   const [batasWaktu, setBatasWaktu] = useState("06:50"); 
   const [isSaving, setIsSaving] = useState(false);
@@ -2596,7 +2808,7 @@ const PengaturanSistem = () => {
       .eq("id", 1)
       .single()
       .then(({ data }) => { 
-        if (data) setBatasWaktu(data.waktu_batas.substring(0, 5)); 
+        if (data && data.waktu_batas) setBatasWaktu(data.waktu_batas.substring(0, 5)); 
       }); 
   }, []);
   
@@ -2609,30 +2821,23 @@ const PengaturanSistem = () => {
   };
   
   return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold font-serif">Pengaturan Sistem</h2>
-      <div className="bg-white rounded-3xl p-8 border max-w-xl shadow-sm">
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex items-center gap-3 mb-6">
+        <div className="bg-slate-800 text-white p-3 rounded-2xl shadow-md"><Settings className="h-6 w-6" /></div>
+        <div><h2 className="text-2xl font-bold font-serif text-slate-800">Pengaturan Sistem</h2><p className="text-sm text-slate-500 mt-1">Konfigurasi batas waktu absensi masuk reguler sekolah.</p></div>
+      </div>
+      <div className="bg-white rounded-3xl p-6 md:p-8 border border-slate-200 shadow-sm max-w-xl">
         <form onSubmit={handleSave} className="space-y-6">
           <div>
-            <label className="block font-bold mb-2">Batas Jam Terlambat Absen</label>
-            <input 
-              type="time" 
-              value={batasWaktu} 
-              onChange={(e) => setBatasWaktu(e.target.value)} 
-              className="w-full px-4 py-3 border rounded-xl text-lg font-bold focus:ring-2 focus:ring-emerald-500" 
-              required 
-            />
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Batas Jam Terlambat Absen Masuk</label>
+            <input type="time" value={batasWaktu} onChange={(e) => setBatasWaktu(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-bold focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none" required />
           </div>
           <div className="p-4 bg-amber-50 rounded-xl flex gap-3 text-amber-700 text-sm border border-amber-200">
             <AlertTriangle className="h-5 w-5 flex-shrink-0" />
-            <p>Perhatian: Jam batas ini akan langsung berlaku untuk semua guru yang melakukan absensi melalui GPS hari ini.</p>
+            <p>Perhatian: Jam batas ini otomatis berlaku untuk semua guru pada mode absensi harian (non-acara).</p>
           </div>
-          <button 
-            type="submit" 
-            disabled={isSaving} 
-            className="bg-emerald-600 hover:bg-emerald-700 transition-colors text-white px-6 py-3 rounded-xl font-bold"
-          >
-            {isSaving ? "Menyimpan..." : "Simpan Pengaturan"}
+          <button type="submit" disabled={isSaving} className="w-full bg-emerald-600 hover:bg-emerald-700 transition-colors text-white px-6 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2">
+            {isSaving ? <RefreshCw className="h-5 w-5 animate-spin" /> : "Simpan Pengaturan"}
           </button>
         </form>
       </div>
@@ -2643,11 +2848,13 @@ const PengaturanSistem = () => {
 // ============================================================================
 // --- ROUTING UTAMA (APP) ---
 // ============================================================================
+// CARI BLOK INI LALU UBAH MENJADI:
 const AdminDashboard = ({ activeMenu }) => {
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {activeMenu === "dashboard" && <AdminDashboardOverview />}
       {activeMenu === "pegawai" && <KelolaPegawai />}
+      {activeMenu === "acara" && <KelolaAcara />} 
       {activeMenu === "jadwaladmin" && <KelolaJadwal />}
       {activeMenu === "perizinan" && <KelolaPerizinan />}
       {activeMenu === "rekap" && <RekapAbsensi />}
